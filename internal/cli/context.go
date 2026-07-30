@@ -100,16 +100,19 @@ func signInError(err error) error {
 
 	// Signed in, but not to the team that was asked for. Naming the teams that
 	// are available is the whole value of this branch.
-	e := clierr.New(clierr.KindAuth, "not signed in to team %q", notSignedIn.Requested).
+	//
+	// The suggested fix is a bare `outplane login`, deliberately without a team
+	// flag. The team is chosen in the console, which is the only place the
+	// user's list of teams exists; a flag would require them to already know a
+	// slug they are trying to discover.
+	return clierr.New(clierr.KindAuth, "not signed in to team %q", notSignedIn.Requested).
 		WithCode("auth.team_not_signed_in").
 		// Passed as an argument rather than concatenated into the format
 		// string: a team slug is user-supplied, and a slug containing a percent
 		// verb would otherwise corrupt the message.
-		WithHint("Signed in to: %s", strings.Join(available, ", ")).
-		WithDetail("signedInTeams", available)
-
-	if notSignedIn.Requested != "" {
-		e = e.WithStep("sign in to this team", "outplane", "login", "--team", notSignedIn.Requested)
-	}
-	return e.WithStep("see every team you are signed into", "outplane", "team", "list")
+		WithHint("Signed in to: %s. Signing in again lets you pick another team.",
+			strings.Join(available, ", ")).
+		WithDetail("signedInTeams", available).
+		WithStep("sign in and choose this team in the console", "outplane", "login").
+		WithStep("see every team you are signed into", "outplane", "team", "list")
 }
