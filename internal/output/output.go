@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/outplane/cli/internal/clierr"
@@ -49,6 +50,17 @@ type Table struct {
 	// Single marks a result that is one object rather than a collection, so
 	// that `app get` emits an object and `app list` emits {items, total}.
 	Single bool
+
+	// Declared is every field this command documents, from its registry entry.
+	// Filled in by the caller rather than by the handler, so that no handler
+	// has to restate what the registry already says.
+	//
+	// It exists so --fields validates against the command's contract instead of
+	// against whatever this particular response happened to contain. Without
+	// it, `--fields updatedAt` is accepted against a team with applications and
+	// rejected against an empty one, which is a script that works all week and
+	// fails on a Monday.
+	Declared []string
 }
 
 // Writer renders results and errors to the right streams.
@@ -66,7 +78,11 @@ func New(out, errw io.Writer, ctx execctx.Context) *Writer {
 // Result renders a successful outcome to stdout.
 func (w *Writer) Result(t Table, fields []string) error {
 	if len(fields) > 0 {
-		t = t.selectFields(fields)
+		narrowed, err := t.selectFields(fields)
+		if err != nil {
+			return err
+		}
+		t = narrowed
 	}
 	switch w.Ctx.Format() {
 	case execctx.FormatJSON:
@@ -97,8 +113,15 @@ func (w *Writer) json(t Table) error {
 		}
 		return enc.Encode(t.Rows[0])
 	}
+	// A nil slice encodes as null, and null is not an empty list: a consumer
+	// iterating items has to special-case it, and one that does not crashes on
+	// the first team with nothing in it. An empty result is [].
+	items := t.Rows
+	if items == nil {
+		items = []map[string]any{}
+	}
 	return enc.Encode(map[string]any{
-		"items":     t.Rows,
+		"items":     items,
 		"total":     t.Total,
 		"truncated": t.Truncated,
 	})
@@ -142,7 +165,7 @@ func (w *Writer) text(t Table) error {
 
 	widths := make([]int, len(t.Columns))
 	for i, c := range t.Columns {
-		widths[i] = len(c)
+		widths[i] = len(heading(c))
 	}
 	for _, row := range t.Rows {
 		for i, c := range t.Columns {
@@ -154,7 +177,7 @@ func (w *Writer) text(t Table) error {
 
 	header := make([]string, len(t.Columns))
 	for i, c := range t.Columns {
-		header[i] = pad(strings.ToUpper(c), widths[i])
+		header[i] = pad(heading(c), widths[i])
 	}
 	fmt.Fprintln(w.Out, strings.TrimRight(strings.Join(header, "  "), " "))
 
@@ -234,18 +257,40 @@ func (w *Writer) Note(format string, args ...any) {
 //
 // Unknown names are ignored rather than rejected here; validation happens at
 // flag-parsing time, where the error can list the available fields.
-func (t Table) selectFields(fields []string) Table {
-	keep := make(map[string]bool, len(fields))
-	for _, f := range fields {
-		keep[strings.TrimSpace(f)] = true
-	}
+// selectFields narrows a result to the fields the caller asked for.
+//
+// Two things here are load-bearing.
+//
+// It selects from every field the rows carry, not just the ones the text table
+// shows by default. Columns is a display choice: `app list` shows four columns
+// and returns nine fields, and --fields is how a caller reaches the other five.
+// Selecting only from Columns would make the documented fields unreachable in
+// exactly the case they exist for.
+//
+// An unknown field is an error rather than an omission. Silently dropping one
+// answers "give me updatedAt" with a result that has no updatedAt and no
+// complaint, which reads as "this record has no timestamp" and is how a typo
+// becomes a wrong conclusion instead of a failed command.
+func (t Table) selectFields(fields []string) (Table, error) {
+	available := t.fieldNames()
 
 	out := Table{Total: t.Total, Truncated: t.Truncated, Single: t.Single}
-	for _, c := range t.Columns {
-		if keep[c] {
-			out.Columns = append(out.Columns, c)
+	seen := make(map[string]bool, len(fields))
+
+	// Requested order wins over declared order, because a caller who wrote
+	// --fields status,name meant those two in that order.
+	for _, raw := range fields {
+		f := strings.TrimSpace(raw)
+		if f == "" || seen[f] {
+			continue
 		}
+		if !available[f] {
+			return Table{}, unknownFieldError(f, available)
+		}
+		seen[f] = true
+		out.Columns = append(out.Columns, f)
 	}
+
 	for _, row := range t.Rows {
 		narrowed := make(map[string]any, len(out.Columns))
 		for _, c := range out.Columns {
@@ -253,7 +298,62 @@ func (t Table) selectFields(fields []string) Table {
 		}
 		out.Rows = append(out.Rows, narrowed)
 	}
-	return out
+	return out, nil
+}
+
+// fieldNames is every field this result can offer.
+//
+// The declared set comes first and is what makes validation independent of the
+// data: an empty list accepts exactly the same field names a full one does.
+// Rows are folded in as well so that a handler returning more than it declared
+// stays usable rather than being punished for it.
+func (t Table) fieldNames() map[string]bool {
+	names := make(map[string]bool, len(t.Declared)+len(t.Columns))
+	for _, f := range t.Declared {
+		names[f] = true
+	}
+	for _, c := range t.Columns {
+		names[c] = true
+	}
+	for _, row := range t.Rows {
+		for k := range row {
+			names[k] = true
+		}
+	}
+	return names
+}
+
+func unknownFieldError(field string, available map[string]bool) error {
+	names := make([]string, 0, len(available))
+	for n := range available {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	return clierr.New(clierr.KindUsage, "no field named %q", field).
+		WithCode("usage.unknown_field").
+		WithHint("Available fields: %s.", strings.Join(names, ", ")).
+		WithDetail("availableFields", names)
+}
+
+// heading turns a field name into a column header.
+//
+// Field names are camelCase because that is what the JSON uses, and uppercasing
+// one directly produces EXPIRESAT and DEPLOYMENTSTATUS. Splitting on the case
+// boundary first gives EXPIRES AT, which is what a person reads.
+//
+// The space is safe here because the text table is for people. Anything parsing
+// output should read --json, where these names keep their original form; the
+// two are different renderings of the same field on purpose.
+func heading(field string) string {
+	var b strings.Builder
+	for i, r := range field {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			b.WriteByte(' ')
+		}
+		b.WriteRune(r)
+	}
+	return strings.ToUpper(b.String())
 }
 
 // format renders a cell for the text table.

@@ -121,7 +121,7 @@ func newRoot(exec *execctx.Context) *cobra.Command {
 
 	root.SetHelpFunc(func(cmd *cobra.Command, _ []string) {
 		if decl, ok := declFor(cmd); ok {
-			help.Render(cmd.OutOrStdout(), decl, globalFlagDocs())
+			help.Render(cmd.OutOrStdout(), decl, registry.GlobalFlags())
 			return
 		}
 		printRootHelp(cmd.OutOrStdout())
@@ -235,6 +235,10 @@ func execute(
 		rt.Fields = splitFields(g.fields)
 	}
 
+	if err := rejectSuppressedGlobals(decl, cmd); err != nil {
+		return finish(rt.Out.Error(err), err)
+	}
+
 	handler, ok := commands.Lookup(decl.Path)
 	if !ok {
 		// Declared but not implemented. Say so plainly: a command that
@@ -254,10 +258,45 @@ func execute(
 	if err != nil {
 		return finish(rt.Out.Error(err), err)
 	}
+	// The registry says which fields this command offers, so --fields can be
+	// checked against the contract rather than against this one response.
+	result.Declared = declaredFields(decl)
+
 	if err := rt.Out.Result(result, rt.Fields); err != nil {
 		return finish(rt.Out.Error(err), err)
 	}
 	return nil
+}
+
+// rejectSuppressedGlobals fails when a command was given a global flag it
+// declared as not applying to it.
+//
+// The global flags are registered once, on the root, so cobra accepts every one
+// of them everywhere. SuppressGlobals hides the inapplicable ones from --help,
+// and hiding alone would leave `outplane team use beta --team acme` quietly
+// accepted while doing nothing with --team. Accepting an argument and ignoring
+// it is the failure this whole codebase keeps trying to avoid: the caller is
+// told nothing and believes something happened.
+func rejectSuppressedGlobals(decl registry.Command, cmd *cobra.Command) error {
+	for _, name := range decl.SuppressGlobals {
+		if !cmd.Flags().Changed(name) {
+			continue
+		}
+		path := strings.Join(decl.Path, " ")
+		return clierr.New(clierr.KindUsage, "--%s does not apply to `outplane %s`", name, path).
+			WithCode("usage.flag_not_applicable").
+			WithHint("It is accepted by other commands, but this one decides %s another way. "+
+				"Run `outplane %s --help` to see what it takes.", name, path)
+	}
+	return nil
+}
+
+func declaredFields(decl registry.Command) []string {
+	names := make([]string, 0, len(decl.OutputFields))
+	for _, f := range decl.OutputFields {
+		names = append(names, f.Name)
+	}
+	return names
 }
 
 // finish returns an error carrying the right exit code, without letting cobra
@@ -378,25 +417,4 @@ func printRootHelp(w interface{ Write([]byte) (int, error) }) {
 	fmt.Fprintln(w, "  outplane schema            the machine-readable command surface,")
 	fmt.Fprintln(w, "                             usable with no authentication and no network")
 	fmt.Fprintln(w)
-}
-
-// globalFlagDocs describes the global flags for the help renderer. They are
-// merged into each command's FLAGS section so that a reader never has to know
-// which level a flag was declared at.
-func globalFlagDocs() []registry.Flag {
-	return []registry.Flag{
-		{Name: "output", Short: "o", Type: "string", Default: "auto",
-			Enum:        []string{"auto", "text", "json", "ndjson"},
-			Description: "output format. auto means text on a terminal, json when piped"},
-		{Name: "json", Type: "bool", Description: "shorthand for --output json"},
-		{Name: "fields", Type: "string", Description: "limit structured output to these fields"},
-		{Name: "team", Type: "string", Description: "team slug or id, overriding the linked team"},
-		{Name: "token", Type: "string",
-			Description: "API token",
-			Discouraged: "argv is visible in process lists and CI logs. Prefer OUTPLANE_TOKEN"},
-		{Name: "quiet", Short: "q", Type: "bool", Description: "suppress everything except errors"},
-		{Name: "dry-run", Type: "bool", Description: "print the request that would be sent, without sending it"},
-		{Name: "yes", Short: "y", Type: "bool",
-			Description: "acknowledge a reversible change. Never enough for a destructive one"},
-	}
 }

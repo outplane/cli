@@ -101,6 +101,15 @@ type CommandDoc struct {
 	Args         []Arg      `json:"args,omitempty"`
 	OutputFields []FieldDoc `json:"output_fields,omitempty"`
 
+	// UnsupportedGlobalArgs names global flags this command rejects, with the
+	// leading dashes so the entries match global_args.
+	//
+	// Without it the schema says --team applies everywhere, and an agent
+	// planning `outplane team use beta --team acme` would be following the
+	// contract into a usage error. The exclusion is small and the schema is the
+	// only place an agent can learn it.
+	UnsupportedGlobalArgs []string `json:"unsupported_global_args,omitempty"`
+
 	ErrorCodes []string `json:"error_codes,omitempty"`
 	ExitCodes  []int    `json:"exit_codes,omitempty"`
 
@@ -228,6 +237,9 @@ func describe(c registry.Command) CommandDoc {
 		LongRunning:     c.LongRunning,
 		SupportsDryRun:  c.SupportsDryRun,
 		APICalls:        c.APICalls,
+
+		UnsupportedGlobalArgs: dashed(c.SuppressGlobals),
+
 		ErrorCodes:      c.ErrorCodes,
 		ExitCodes:       c.ExitCodes,
 		AutomationNotes: c.AutomationNotes,
@@ -331,31 +343,42 @@ func join(path []string) string {
 	return out
 }
 
-// globalArgs are the flags every command accepts.
-func globalArgs() []Arg {
-	return []Arg{
-		{Name: "--output", Short: "-o", Type: "string", Default: "auto",
-			Enum:        []string{"auto", "text", "json", "ndjson"},
-			Description: "output format. auto means text on a terminal, json when piped"},
-		{Name: "--json", Type: "bool", Default: "false",
-			Description: "shorthand for --output json"},
-		{Name: "--jq", Type: "string",
-			Description: "filter structured output with a jq expression"},
-		{Name: "--fields", Type: "string[]",
-			Description: "limit structured output to these fields. Pass --json with no value to list them"},
-		{Name: "--team", Type: "string",
-			Description: "team slug or id, overriding the linked team"},
-		{Name: "--quiet", Short: "-q", Type: "bool", Default: "false",
-			Description: "suppress everything except errors"},
-		{Name: "--no-color", Type: "bool", Default: "false",
-			Description: "disable colour. NO_COLOR and TERM=dumb are also honoured"},
-		{Name: "--dry-run", Type: "bool", Default: "false",
-			Description: "validate and print the request that would be sent, without sending it"},
-		{Name: "--yes", Short: "-y", Type: "bool", Default: "false",
-			Description: "acknowledge a reversible mutation. Never sufficient for a destructive one"},
-		{Name: "--timeout", Type: "duration", Default: "20m",
-			Description: "client-side deadline"},
+// dashed prefixes bare flag names so they match the form used in global_args.
+// A consumer comparing the two lists should not have to normalise either one.
+func dashed(names []string) []string {
+	if len(names) == 0 {
+		return nil
 	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		out = append(out, "--"+n)
+	}
+	return out
+}
+
+// globalArgs are the flags every command accepts.
+//
+// Derived from registry.GlobalFlags rather than restated here. This function
+// used to hold its own copy, and it drifted: it advertised --jq and --timeout,
+// neither of which the CLI has, and left out --token, which it does. The schema
+// is what an agent plans against, so a wrong entry becomes a command that fails
+// on execution for a reason nothing explained.
+func globalArgs() []Arg {
+	flags := registry.GlobalFlags()
+	args := make([]Arg, 0, len(flags))
+	for _, f := range flags {
+		args = append(args, Arg{
+			Name:        "--" + f.Name,
+			Short:       shortFlag(f.Short),
+			Type:        f.Type,
+			Description: f.Description,
+			Default:     f.Default,
+			Enum:        f.Enum,
+			Repeatable:  f.Repeatable,
+			Discouraged: f.Discouraged,
+		})
+	}
+	return args
 }
 
 // errorKinds is the closed set of coarse error classes.
