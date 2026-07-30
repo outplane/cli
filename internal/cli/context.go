@@ -7,8 +7,10 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"runtime"
+	"strings"
 
 	"github.com/outplane/cli/internal/api"
 	"github.com/outplane/cli/internal/clierr"
@@ -56,23 +58,8 @@ func Build(exec execctx.Context, ov config.Overrides, version string, out, errw 
 // The error is written carefully: an agent that receives it should be able to
 // act without asking a human, and a human should not have to search the docs.
 func (c *Context) APIClient() (*api.Client, error) {
-	if !c.Config.Token.IsSet() {
-		return nil, clierr.New(clierr.KindAuth, "not signed in").
-			WithCode("auth.not_authenticated").
-			WithHint("Sign in once and the token is stored for future commands.").
-			WithStep("sign in interactively", "outplane", "login").
-			WithStep("or supply a token without signing in", "OUTPLANE_TOKEN=<TOKEN>", "outplane", "app", "list")
-	}
-
-	if !c.Config.TeamID.IsSet() {
-		// Reaching here means the credential carried no team claim and nothing
-		// else supplied one, which is unusual enough to be worth its own
-		// message rather than letting the server return a confusing 400.
-		return nil, clierr.New(clierr.KindUsage, "no team was resolved for this command").
-			WithCode("context.no_team").
-			WithHint("Most commands operate on one team. The CLI could not work out which.").
-			WithStep("link this directory to a team and app", "outplane", "link").
-			WithStep("or name a team for this invocation", "outplane", "app", "list", "--team", "<TEAM_SLUG>")
+	if c.Config.TeamError != nil {
+		return nil, signInError(c.Config.TeamError)
 	}
 
 	return api.New(api.Config{
@@ -86,3 +73,43 @@ func (c *Context) APIClient() (*api.Client, error) {
 
 // Version reports the CLI version, for the User-Agent and `outplane version`.
 func (c *Context) Version() string { return c.version }
+
+// signInError turns a credential-resolution failure into a message that says
+// what to do next.
+//
+// Team-scoped tokens make this worth care: "not signed in" is ambiguous when a
+// user is signed in to two teams and asked for a third. The message names the
+// teams that ARE available, so the fix is visible without running another
+// command.
+func signInError(err error) error {
+	var notSignedIn *config.TeamNotSignedInError
+	if !errors.As(err, &notSignedIn) {
+		return clierr.New(clierr.KindAuth, "%v", err).WithCode("auth.not_authenticated")
+	}
+
+	available := notSignedIn.AvailableSlugs()
+
+	// Nothing stored at all: a first run.
+	if len(available) == 0 {
+		return clierr.New(clierr.KindAuth, "not signed in").
+			WithCode("auth.not_authenticated").
+			WithHint("Signing in stores a token for one team. Teams are separate credentials.").
+			WithStep("sign in", "outplane", "login").
+			WithStep("or supply a token directly", "OUTPLANE_TOKEN=<TOKEN>", "outplane", "app", "list")
+	}
+
+	// Signed in, but not to the team that was asked for. Naming the teams that
+	// are available is the whole value of this branch.
+	e := clierr.New(clierr.KindAuth, "not signed in to team %q", notSignedIn.Requested).
+		WithCode("auth.team_not_signed_in").
+		// Passed as an argument rather than concatenated into the format
+		// string: a team slug is user-supplied, and a slug containing a percent
+		// verb would otherwise corrupt the message.
+		WithHint("Signed in to: %s", strings.Join(available, ", ")).
+		WithDetail("signedInTeams", available)
+
+	if notSignedIn.Requested != "" {
+		e = e.WithStep("sign in to this team", "outplane", "login", "--team", notSignedIn.Requested)
+	}
+	return e.WithStep("see every team you are signed into", "outplane", "team", "list")
+}

@@ -106,10 +106,17 @@ func (l Link) Path() string { return l.path }
 
 // Resolved is the complete answer to "what should this invocation do".
 type Resolved struct {
-	APIURL Value
-	Token  Value
-	TeamID Value
-	AppID  Value
+	APIURL   Value
+	Token    Value
+	TeamID   Value
+	TeamSlug Value
+	AppID    Value
+
+	// TeamError explains why no team could be resolved, when none could. It is
+	// carried rather than returned so that commands which need no credential
+	// still run: `schema`, `version` and `help` must work on a machine that has
+	// never been logged in.
+	TeamError error
 
 	// File and Link are the underlying sources, exposed so that `status` and
 	// `config list` can report detail without re-reading anything.
@@ -154,19 +161,11 @@ func Resolve(ov Overrides) (Resolved, error) {
 		Value{DefaultAPIURL, SourceDefault},
 	)
 
-	r.Token = pick(
-		Value{ov.Token, SourceFlag},
-		Value{os.Getenv("OUTPLANE_TOKEN"), SourceEnv},
-		credentialValue(file.ActiveProfile),
-	)
-
-	r.TeamID = pick(
-		Value{ov.Team, SourceFlag},
-		Value{os.Getenv("OUTPLANE_TEAM_ID"), SourceEnv},
-		linkValue(link, func(l *Link) string { return l.TeamID }),
-		Value{profile.TeamID, SourceFile},
-		tokenTeamValue(r.Token.Value),
-	)
+	// Team and credential are resolved together, because with team-scoped
+	// tokens they are one decision rather than two. Asking "which team" and
+	// then "which token" separately is how a CLI ends up sending team A's
+	// header with team B's token and reporting a confusing 403.
+	r.TeamID, r.TeamSlug, r.Token, r.TeamError = resolveTeamAndToken(ov, link, profile)
 
 	r.AppID = pick(
 		Value{ov.App, SourceFlag},
@@ -192,26 +191,6 @@ func linkValue(l *Link, get func(*Link) string) Value {
 		return Value{}
 	}
 	return Value{get(l), SourceLink}
-}
-
-// tokenTeamValue reads the team out of an API token without a network call.
-//
-// An Out Plane API token is a JWT carrying a team_id claim, which means the
-// CLI can learn its own team by decoding the credential it already holds. That
-// is what makes a zero-configuration first run possible: paste a token and
-// every team-scoped command works immediately.
-func tokenTeamValue(token string) Value {
-	if token == "" {
-		return Value{}
-	}
-	claims, err := decodeJWTClaims(token)
-	if err != nil {
-		return Value{}
-	}
-	if team, ok := claims["team_id"].(string); ok && team != "" {
-		return Value{team, SourceToken}
-	}
-	return Value{}
 }
 
 // decodeJWTClaims reads a JWT payload WITHOUT verifying the signature.
