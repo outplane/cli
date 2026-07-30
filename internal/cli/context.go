@@ -108,6 +108,20 @@ func signInError(err error) error {
 				"unset", "OUTPLANE_TOKEN")
 	}
 
+	// A link file that exists but will not parse. Not an authentication
+	// problem at all: the credential may be perfectly good, but the file that
+	// would have chosen a team is unreadable, and guessing which team it meant
+	// is how a command acts on the wrong one.
+	var badLink *config.LinkUnreadableError
+	if errors.As(err, &badLink) {
+		return clierr.New(clierr.KindUsage, "%v", badLink).
+			WithCode("link.unreadable").
+			WithHint("A link file names the team for this directory. While it cannot be "+
+				"read, no command can know which team you meant.").
+			WithStep("remove it and start again", "outplane", "unlink").
+			WithDetail("linkPath", badLink.Path)
+	}
+
 	var notSignedIn *config.TeamNotSignedInError
 	if !errors.As(err, &notSignedIn) {
 		return clierr.New(clierr.KindAuth, "%v", err).WithCode("auth.not_authenticated")

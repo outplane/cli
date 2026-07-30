@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 
 	"github.com/outplane/cli/internal/config"
 	"github.com/outplane/cli/internal/output"
@@ -49,6 +50,13 @@ func status(_ context.Context, req Request) (output.Table, error) {
 
 	if cfg.Link != nil {
 		row["linkedDirectory"] = cfg.Link.Path()
+	}
+	// A link that would not parse still has a path, and naming it is the whole
+	// value of this command in that situation: the file is the problem, and the
+	// reader needs to know which one.
+	var badLink *config.LinkUnreadableError
+	if errors.As(cfg.LinkError, &badLink) {
+		row["linkedDirectory"] = badLink.Path
 	}
 
 	// No credential resolved. The reason is the whole answer, so report it and

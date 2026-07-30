@@ -122,6 +122,11 @@ type Resolved struct {
 	// `config list` can report detail without re-reading anything.
 	File File
 	Link *Link
+
+	// LinkError is a link file that exists but could not be parsed. Carried,
+	// not returned, so that the commands which diagnose and repair it still
+	// run. See Resolve.
+	LinkError error
 }
 
 // Overrides are the values a flag supplied. Empty means "not given".
@@ -147,11 +152,20 @@ func Resolve(ov Overrides) (Resolved, error) {
 	r.File = file
 	profile := file.Profiles[file.ActiveProfile]
 
-	link, err := FindLink("")
-	if err != nil {
-		return r, err
-	}
+	// A link that cannot be parsed is carried rather than returned.
+	//
+	// Returning it used to abort Resolve, which aborted cli.Build, which meant
+	// one malformed file made EVERY command in that directory exit 1 with no
+	// structured error: `status`, which exists to diagnose this, and `unlink`,
+	// which exists to fix it, included. One bad file bricked the tool exactly
+	// where it was needed.
+	//
+	// It is also recorded as TeamError below, because a link that cannot be
+	// read might have named a different team, and silently falling through to
+	// the active one would act on the wrong team without saying so.
+	link, linkErr := FindLink("")
 	r.Link = link
+	r.LinkError = linkErr
 
 	r.APIURL = pick(
 		Value{ov.APIURL, SourceFlag},
@@ -166,6 +180,14 @@ func Resolve(ov Overrides) (Resolved, error) {
 	// then "which token" separately is how a CLI ends up sending team A's
 	// header with team B's token and reporting a confusing 403.
 	r.TeamID, r.TeamSlug, r.Token, r.TeamError = resolveTeamAndToken(ov, link, profile)
+
+	// An unreadable link outranks whatever was resolved above, because it may
+	// have named a team other than the one that won. Commands needing a
+	// credential stop here with something they can act on; `status` and
+	// `unlink`, which need none, carry on and deal with it.
+	if linkErr != nil {
+		r.TeamError = linkErr
+	}
 
 	// COLLISION 2: an explicit team that is not the linked directory's team.
 	//
@@ -331,7 +353,11 @@ func FindLink(dir string) (*Link, error) {
 		if err == nil {
 			var l Link
 			if err := json.Unmarshal(raw, &l); err != nil {
-				return nil, fmt.Errorf("%s is not valid JSON: %w", candidate, err)
+				// Typed, and carrying the path, because the commands that have
+				// to cope with this need to act on the file: `unlink` deletes
+				// it and `status` names it. An error whose path exists only
+				// inside its message string can be printed and nothing else.
+				return nil, &LinkUnreadableError{Path: candidate, Err: err}
 			}
 			l.path = candidate
 			return &l, nil
@@ -343,6 +369,22 @@ func FindLink(dir string) (*Link, error) {
 		dir = parent
 	}
 }
+
+// LinkUnreadableError is a link file that exists but cannot be parsed.
+//
+// It is a distinct type so that the two commands which must keep working
+// despite it can: `outplane unlink` deletes the file it names, and
+// `outplane status` reports it instead of dying on it.
+type LinkUnreadableError struct {
+	Path string
+	Err  error
+}
+
+func (e *LinkUnreadableError) Error() string {
+	return fmt.Sprintf("%s is not valid JSON: %v", e.Path, e.Err)
+}
+
+func (e *LinkUnreadableError) Unwrap() error { return e.Err }
 
 // SaveLink writes .outplane/link.json in dir.
 func SaveLink(dir string, l Link) (string, error) {
@@ -359,6 +401,34 @@ func SaveLink(dir string, l Link) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// RemoveLink deletes a link file and, if it leaves the .outplane directory
+// empty, that directory too.
+//
+// Tidying up the directory matters more than it sounds: a stray empty
+// .outplane/ left in a repository is the kind of thing that gets committed by
+// somebody running `git add .`, and then puzzled over months later.
+//
+// An already-absent file is not an error. Unlinking twice should be quiet, so a
+// teardown script can run unconditionally.
+func RemoveLink(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	if filepath.Base(dir) != ".outplane" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) > 0 {
+		return nil
+	}
+	// Best effort. Failing to remove an empty directory is not worth failing
+	// the command the caller actually asked for.
+	_ = os.Remove(dir)
+	return nil
 }
 
 // writeAtomic writes via a temporary file and a rename, so that an interrupted

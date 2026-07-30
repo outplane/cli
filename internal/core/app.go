@@ -11,6 +11,8 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/outplane/cli/internal/api"
@@ -120,6 +122,94 @@ func ListApps(ctx context.Context, c *api.Client, search string) ([]App, error) 
 		})
 	}
 	return apps, nil
+}
+
+// FindApp resolves a reference typed by a person into exactly one application.
+//
+// This is the reference implementation for every argument declared with
+// Resolves. The API has no lookup-by-name endpoint anywhere: every path
+// parameter is a GUID, so turning "checkout" into an id is entirely the
+// client's job, and the only way to do it is to list and match.
+//
+// Matching is exact and never fuzzy, in any of the three fields. Resolving
+// "check" to "checkout" would work until the day somebody creates "checkers",
+// and the command being resolved for might be `app delete`. A near miss is
+// reported as a miss, with the available names listed so the correction is one
+// read away rather than another command away.
+func FindApp(ctx context.Context, c *api.Client, ref string) (App, error) {
+	apps, err := ListApps(ctx, c, "")
+	if err != nil {
+		return App{}, err
+	}
+
+	// An id is unambiguous by construction, so it settles the question before
+	// any name is considered.
+	for _, a := range apps {
+		if a.ID == ref {
+			return a, nil
+		}
+	}
+
+	// The name is unique within a team and is what appears in URLs.
+	for _, a := range apps {
+		if a.Name == ref {
+			return a, nil
+		}
+	}
+
+	// The display name is editable and NOT unique, which is why it is tried
+	// last and why a tie has to be refused rather than resolved. Picking the
+	// first of two would be a coin flip the caller never sees.
+	var byDisplay []App
+	for _, a := range apps {
+		if a.DisplayName == ref {
+			byDisplay = append(byDisplay, a)
+		}
+	}
+	switch len(byDisplay) {
+	case 1:
+		return byDisplay[0], nil
+	case 0:
+		return App{}, &AppNotFoundError{Ref: ref, Available: appNames(apps)}
+	default:
+		return App{}, &AmbiguousAppError{Ref: ref, Matches: byDisplay}
+	}
+}
+
+// AppNotFoundError carries the names that do exist, because "no such app" on
+// its own sends the reader off to run another command to find out what is
+// there.
+type AppNotFoundError struct {
+	Ref       string
+	Available []string
+}
+
+func (e *AppNotFoundError) Error() string {
+	return fmt.Sprintf("no application called %q in this team", e.Ref)
+}
+
+// AmbiguousAppError means a display name is shared. It carries the matches so
+// the caller can be told to use a name or an id instead.
+type AmbiguousAppError struct {
+	Ref     string
+	Matches []App
+}
+
+func (e *AmbiguousAppError) Error() string {
+	return fmt.Sprintf("%d applications share the display name %q", len(e.Matches), e.Ref)
+}
+
+// Names lists the unique names of the tied applications, which are what the
+// caller should use instead.
+func (e *AmbiguousAppError) Names() []string { return appNames(e.Matches) }
+
+func appNames(apps []App) []string {
+	out := make([]string, 0, len(apps))
+	for _, a := range apps {
+		out = append(out, a.Name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // matches implements --search: a case-insensitive substring test against both
