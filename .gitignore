@@ -1,0 +1,22 @@
+# Build output
+/dist/
+/outplane
+/outplane.exe
+
+# Go
+*.test
+*.out
+/vendor/
+
+# npm packaging workspace, generated at release time
+/npm/packages/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local overrides. Never commit a real token.
+.env
+.env.local
