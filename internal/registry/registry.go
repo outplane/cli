@@ -164,6 +164,15 @@ type Command struct {
 	// Output overrides the tool-wide TTY/piped defaults. Nil means use them.
 	Output *OutputMode
 
+	// SuppressGlobals names global flags that do not apply to this command, so
+	// that help does not offer an option which would do nothing.
+	//
+	// `login` suppresses --team: the team is chosen in the console, and showing
+	// a team flag would contradict the command's own documentation. An option
+	// that appears in help and then has no effect is worse than one that does
+	// not exist, for a human and for an agent alike.
+	SuppressGlobals []string
+
 	// APICalls lists the API endpoints this command hits, for the schema and
 	// for whoever has to trace a failure back to a controller. Purely
 	// documentary; nothing reads it at runtime.

@@ -1,0 +1,325 @@
+package commands
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/outplane/cli/internal/api"
+	"github.com/outplane/cli/internal/clierr"
+	"github.com/outplane/cli/internal/config"
+	"github.com/outplane/cli/internal/core"
+	"github.com/outplane/cli/internal/output"
+	"github.com/pkg/browser"
+	"golang.org/x/term"
+)
+
+func init() {
+	register("login", login)
+	register("logout", logout)
+	register("whoami", whoami)
+}
+
+// consoleTokensPath is where a user creates a token. Deriving the console host
+// from the API host means a local or self-hosted deployment sends people to its
+// own console rather than to production.
+const consoleTokensPath = "/settings/api-tokens"
+
+// login obtains a token and stores it against the team it belongs to.
+//
+// The sequence is deliberate:
+//
+//  1. Get the token. From stdin for scripts, otherwise a masked prompt.
+//  2. Decode it locally to learn its team and expiry. This costs nothing and
+//     catches a mistyped paste before a request is made.
+//  3. Call the API to prove it actually works, and to learn the team's slug,
+//     which is not in the token.
+//  4. Store it, keyed by that slug.
+//
+// Step 3 matters more than it looks. Without it, a revoked or truncated token
+// would be stored happily and fail later, somewhere less obvious.
+func login(ctx context.Context, req Request) (output.Table, error) {
+	cli := req.CLI
+
+	token, err := readToken(req)
+	if err != nil {
+		return output.Table{}, err
+	}
+
+	info, err := config.InspectToken(token)
+	if err != nil {
+		return output.Table{}, clierr.New(clierr.KindUsage, "%v", err).
+			WithCode("auth.token_malformed").
+			WithHint("An Out Plane token is a long string beginning with \"ey\". "+
+				"Copy the whole value, including any trailing characters.").
+			WithStep("create a token in the console", "outplane", "login", "--no-browser")
+	}
+
+	// Verify against the API with this token specifically, not with whatever
+	// credential happened to be resolved for the invocation.
+	probe := api.New(api.Config{
+		BaseURL: cli.Config.APIURL.Value,
+		Token:   token,
+		TeamID:  info.TeamID,
+		Version: cli.Version(),
+		OSArch:  runtime.GOOS + "/" + runtime.GOARCH,
+		Timeout: 20 * time.Second,
+	})
+
+	slug, err := core.VerifyToken(ctx, probe)
+	if err != nil {
+		return output.Table{}, clierr.New(clierr.KindAuth, "this token was not accepted").
+			WithCode("auth.token_invalid").
+			WithHint("It may have been revoked, or it may have expired. "+
+				"Tokens are shown once when created and cannot be retrieved later.").
+			WithStep("create a new one", "outplane", "login").
+			WithDetail("reason", err.Error())
+	}
+
+	existing, alreadyStored := config.FindCredential(slug)
+	changed := !alreadyStored || existing.Token != token
+
+	expiresAt := ""
+	if !info.ExpiresAt.IsZero() {
+		expiresAt = info.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+
+	if err := config.StoreCredential(config.Credential{
+		Token:     token,
+		TeamID:    info.TeamID,
+		TeamSlug:  slug,
+		Name:      defaultTokenName(),
+		ExpiresAt: expiresAt,
+	}); err != nil {
+		return output.Table{}, clierr.New(clierr.KindInternal, "could not store the token: %v", err)
+	}
+
+	cli.Out.Note("Signed in to %s.", slug)
+
+	return output.Table{
+		Single:  true,
+		Columns: []string{"teamSlug", "teamId", "expiresAt", "changed"},
+		Total:   1,
+		Rows: []map[string]any{{
+			"teamSlug":  slug,
+			"teamId":    info.TeamID,
+			"expiresAt": nilIfEmpty(expiresAt),
+			"changed":   changed,
+		}},
+	}, nil
+}
+
+// readToken obtains the token, by whichever route the environment allows.
+func readToken(req Request) (string, error) {
+	// An explicit flag wins, though the help text discourages it: argv is
+	// visible in process lists and CI logs.
+	if v := strings.TrimSpace(req.Flags.String("token")); v != "" {
+		return v, nil
+	}
+
+	if req.Flags.Bool("token-stdin") {
+		return readTokenFromStdin()
+	}
+
+	// Without a terminal there is nobody to prompt. Say so, rather than
+	// hanging on a read that will never return.
+	if !req.CLI.Exec.Interactive() {
+		return "", clierr.New(clierr.KindUsage, "no terminal available to prompt for a token").
+			WithCode("auth.no_terminal").
+			WithHint("Signing in needs either a terminal or an explicit token.").
+			WithStep("pipe a token in", "cat", "token.txt", "|", "outplane", "login", "--token-stdin").
+			WithStep("or skip signing in entirely", "OUTPLANE_TOKEN=<TOKEN>", "outplane", "app", "list")
+	}
+
+	openConsole(req)
+	return promptForToken(req.CLI.Out)
+}
+
+// readTokenFromStdin reads a token piped in, tolerating a trailing newline.
+func readTokenFromStdin() (string, error) {
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", clierr.New(clierr.KindUsage, "could not read the token from standard input: %v", err)
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return "", clierr.New(clierr.KindUsage, "no token was supplied on standard input").
+			WithCode("auth.token_missing")
+	}
+	return token, nil
+}
+
+// openConsole points the user at the page where tokens are created.
+//
+// The URL is always printed, and printed BEFORE the browser is opened. Two
+// common failures make that worth the extra line: the browser opens in a
+// profile signed in as somebody else, or it opens behind the terminal and the
+// user never sees it. In both cases a visible URL is the only recovery.
+func openConsole(req Request) {
+	url := consoleURL(req.CLI.Config.APIURL.Value) + consoleTokensPath
+
+	req.CLI.Out.Note("Create a token here, then paste it below:")
+	req.CLI.Out.Note("  %s", url)
+	req.CLI.Out.Note("")
+
+	if req.Flags.Bool("no-browser") || !req.CLI.Exec.CanOpenBrowser() {
+		return
+	}
+	// A browser that will not open is not an error: the URL is already on
+	// screen and the user can open it themselves.
+	_ = browser.OpenURL(url)
+}
+
+// consoleURL derives the console host from the API host, so that a local or
+// self-hosted deployment sends people to its own console.
+//
+// Falls back to production when the API URL is not one we recognise, because a
+// wrong-looking link is more useful than no link.
+func consoleURL(apiURL string) string {
+	const production = "https://console.outplane.com"
+
+	trimmed := strings.TrimPrefix(strings.TrimPrefix(apiURL, "https://"), "http://")
+	host, _, _ := strings.Cut(trimmed, "/")
+
+	switch {
+	case strings.HasPrefix(host, "api."):
+		return "https://console." + strings.TrimPrefix(host, "api.")
+	case strings.HasPrefix(host, "localhost"), strings.HasPrefix(host, "127.0.0.1"):
+		return "http://localhost:5173"
+	default:
+		return production
+	}
+}
+
+// promptForToken reads the token without echoing it.
+//
+// Echo is disabled so the token does not end up in a screen recording, a
+// screen share, or a scrollback buffer that someone later pastes into an issue.
+func promptForToken(out *output.Writer) (string, error) {
+	fmt.Fprint(out.Err, "Token: ")
+
+	raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(out.Err)
+	if err != nil {
+		return "", clierr.New(clierr.KindUsage, "could not read the token: %v", err)
+	}
+
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return "", clierr.New(clierr.KindUsage, "no token was entered").
+			WithCode("auth.token_missing")
+	}
+	return token, nil
+}
+
+// defaultTokenName labels the credential with the machine it lives on, so that
+// a console showing three tokens says which laptop each belongs to, and losing
+// a machine makes it obvious which one to revoke.
+func defaultTokenName() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "cli"
+	}
+	// Strip a trailing .local, which macOS adds and nobody wants to read.
+	return "cli: " + strings.TrimSuffix(host, ".local")
+}
+
+func logout(_ context.Context, req Request) (output.Table, error) {
+	all := req.Flags.Bool("all")
+
+	var removed []string
+	if all {
+		for _, c := range config.SignedInTeams() {
+			removed = append(removed, c.TeamSlug)
+		}
+		if err := config.ForgetCredential(""); err != nil {
+			return output.Table{}, clierr.New(clierr.KindInternal, "could not remove the credentials: %v", err)
+		}
+	} else {
+		slug := req.CLI.Config.TeamSlug.Value
+		if slug == "" {
+			slug = config.ActiveTeamSlug()
+		}
+		if slug == "" {
+			// Nothing to do is not a failure. Logging out twice should be
+			// quiet, so that a teardown script can run unconditionally.
+			req.CLI.Out.Note("Not signed in; nothing to remove.")
+			return logoutResult(nil), nil
+		}
+		removed = []string{slug}
+		if err := config.ForgetCredential(slug); err != nil {
+			return output.Table{}, clierr.New(clierr.KindInternal, "could not remove the credential: %v", err)
+		}
+	}
+
+	if len(removed) > 0 {
+		req.CLI.Out.Note("Removed the stored credential for %s.", strings.Join(removed, ", "))
+		req.CLI.Out.Note("The token itself is still valid. Revoke it in the console to disable it.")
+	}
+	return logoutResult(removed), nil
+}
+
+func logoutResult(removed []string) output.Table {
+	if removed == nil {
+		removed = []string{}
+	}
+	return output.Table{
+		Single:  true,
+		Columns: []string{"removed", "changed"},
+		Total:   1,
+		Rows: []map[string]any{{
+			"removed": removed,
+			"changed": len(removed) > 0,
+		}},
+	}
+}
+
+// whoami reports the active credential without touching the network.
+//
+// Answering offline is the point: "which team am I about to act as" is exactly
+// the question worth asking when something is already going wrong, including
+// when the API is unreachable.
+func whoami(_ context.Context, req Request) (output.Table, error) {
+	if req.CLI.Config.TeamError != nil {
+		return output.Table{}, req.CLI.SignInError()
+	}
+
+	slug := req.CLI.Config.TeamSlug.Value
+	cred, _ := config.FindCredential(slug)
+
+	return output.Table{
+		Single:  true,
+		Columns: []string{"teamSlug", "teamId", "tokenName", "expiresAt", "daysLeft", "source"},
+		Total:   1,
+		Rows: []map[string]any{{
+			"teamSlug":  firstNonEmpty(slug, req.CLI.Config.TeamID.Value),
+			"teamId":    req.CLI.Config.TeamID.Value,
+			"tokenName": nilIfEmpty(cred.Name),
+			"expiresAt": nilIfEmpty(cred.ExpiresAt),
+			"daysLeft":  cred.DaysLeft(),
+			"source":    string(req.CLI.Config.Token.Source),
+		}},
+	}, nil
+}
+
+// nilIfEmpty renders an absent value as JSON null rather than an empty string,
+// so that a consumer can tell "no expiry" from "expiry unknown".
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}

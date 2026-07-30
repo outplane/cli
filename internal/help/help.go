@@ -72,8 +72,23 @@ func Render(w io.Writer, c registry.Command, globalFlags []registry.Flag) {
 			local[f.Name] = true
 			p.kv(flagLabel(f), flagDescription(f))
 		}
+
+		suppressed := make(map[string]bool, len(c.SuppressGlobals))
+		for _, name := range c.SuppressGlobals {
+			suppressed[name] = true
+		}
+
 		for _, f := range globalFlags {
-			if local[f.Name] {
+			if local[f.Name] || suppressed[f.Name] {
+				continue
+			}
+			// --dry-run is only real for commands that declared support for it.
+			// Listing it everywhere would promise a preview that never arrives.
+			if f.Name == "dry-run" && !c.SupportsDryRun {
+				continue
+			}
+			// --yes only means something where a confirmation exists.
+			if f.Name == "yes" && c.Risk == registry.RiskRead {
 				continue
 			}
 			p.kv(flagLabel(f), flagDescription(f))

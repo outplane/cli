@@ -74,6 +74,19 @@ func (c *Context) APIClient() (*api.Client, error) {
 // Version reports the CLI version, for the User-Agent and `outplane version`.
 func (c *Context) Version() string { return c.version }
 
+// SignInError is the credential-resolution failure for this invocation, phrased
+// for a human and for an agent.
+//
+// Exposed so that commands which read the credential without making a request,
+// `whoami` and `status`, produce the same message as one that does. Two
+// different explanations of the same condition would be worse than either.
+func (c *Context) SignInError() error {
+	if c.Config.TeamError == nil {
+		return nil
+	}
+	return signInError(c.Config.TeamError)
+}
+
 // signInError turns a credential-resolution failure into a message that says
 // what to do next.
 //
