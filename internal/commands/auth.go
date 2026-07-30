@@ -311,7 +311,7 @@ func whoami(_ context.Context, req Request) (output.Table, error) {
 			"teamId":    req.CLI.Config.TeamID.Value,
 			"tokenName": nilIfEmpty(cred.Name),
 			"expiresAt": nilIfEmpty(expiresAt),
-			"daysLeft":  daysLeft,
+			"daysLeft":  daysLeftValue(expiresAt, daysLeft),
 			"source":    string(req.CLI.Config.Token.Source),
 		}},
 	}, nil
@@ -324,4 +324,21 @@ func nilIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+// daysLeftValue renders days remaining, or null when the token has no expiry.
+//
+// Null rather than -1, which is what this used to return for "never expires". A
+// token that expired thirty hours ago also produces -1, because the division
+// truncates toward zero, so the same value meant both "this never expires" and
+// "this expired yesterday". Those are opposite facts and a caller deciding
+// whether to rotate would act on either.
+//
+// Null now means there is no expiry at all; a negative number means the expiry
+// has passed and by how much.
+func daysLeftValue(expiresAt string, days int) any {
+	if expiresAt == "" {
+		return nil
+	}
+	return days
 }

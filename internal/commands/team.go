@@ -41,7 +41,7 @@ func teamList(_ context.Context, req Request) (output.Table, error) {
 			"active":    activeID != "" && c.TeamID == activeID,
 			"tokenName": nilIfEmpty(c.Name),
 			"expiresAt": nilIfEmpty(c.ExpiresAt),
-			"daysLeft":  c.DaysLeft(),
+			"daysLeft":  daysLeftValue(c.ExpiresAt, c.DaysLeft()),
 			"expired":   c.Expired(),
 		})
 	}

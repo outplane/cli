@@ -220,13 +220,31 @@ func toError(status int, env envelope, reqID string) *clierr.Error {
 		}
 		return e.WithRequestID(reqID)
 
+	case status == http.StatusUnauthorized:
+		// The JWT middleware rejected the token before any controller saw it:
+		// a bad signature, a malformed token, or one that has expired. There is
+		// no envelope on this response, because nothing in the application ran.
+		//
+		// Both this and 403 have to be handled. An earlier version of this
+		// function mapped only 403, on the belief that the API never returns
+		// 401, and a token with a corrupted signature was consequently reported
+		// as "could not reach the API": a wrong diagnosis pointing at the
+		// network for a problem in the credential.
+		return clierr.New(clierr.KindAuth, "the token was rejected").
+			WithCode("auth.token_rejected").
+			WithHint("It is expired, malformed, or was not issued by this API.").
+			WithStep("check the current credential", "outplane", "whoami").
+			WithStep("sign in again", "outplane", "login").
+			WithRequestID(reqID)
+
 	case status == http.StatusForbidden:
-		// Not 401. This API returns 403 for every authorisation failure,
-		// including a revoked or expired token, so "please log in again" has
-		// to key on 403 rather than on the conventional status.
+		// Authenticated, but not allowed. This API also uses 403 where others
+		// would use 401, for a revoked token and for one belonging to another
+		// team, so this branch cannot assume the caller is merely lacking a
+		// permission.
 		return clierr.New(clierr.KindAuth, "%s", fallback(apiMessage, "not authorised")).
 			WithCode("auth.forbidden").
-			WithHint("The token may be revoked, expired, or belong to a different team.").
+			WithHint("The token may be revoked, or belong to a different team.").
 			WithStep("check the current credential", "outplane", "whoami").
 			WithStep("sign in again", "outplane", "login").
 			WithRequestID(reqID)

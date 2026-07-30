@@ -55,7 +55,7 @@ func teamList() Command {
 			},
 			{Name: "tokenName", Type: "string | null", Description: "the label shown in the console"},
 			{Name: "expiresAt", Type: "string | null", Description: "RFC 3339"},
-			{Name: "daysLeft", Type: "int", Description: "-1 when the token never expires"},
+			{Name: "daysLeft", Type: "int | null", Description: "null when the token never expires, negative once it has passed"},
 			{Name: "expired", Type: "bool", Description: "read from the token, not confirmed with the server"},
 		},
 

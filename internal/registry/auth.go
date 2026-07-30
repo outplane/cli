@@ -201,7 +201,7 @@ func whoami() Command {
 				Description: "the label shown in the console, for a stored credential",
 			},
 			{Name: "expiresAt", Type: "string | null", Description: "RFC 3339, read from the token"},
-			{Name: "daysLeft", Type: "int", Description: "-1 when the token never expires"},
+			{Name: "daysLeft", Type: "int | null", Description: "null when the token never expires, negative once it has passed"},
 			{
 				Name:        "source",
 				Type:        "string",
