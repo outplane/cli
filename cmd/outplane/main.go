@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -23,6 +24,7 @@ import (
 	"github.com/outplane/cli/internal/config"
 	"github.com/outplane/cli/internal/execctx"
 	"github.com/outplane/cli/internal/help"
+	"github.com/outplane/cli/internal/output"
 	"github.com/outplane/cli/internal/registry"
 	"github.com/outplane/cli/internal/schema"
 	"github.com/spf13/cobra"
@@ -50,13 +52,50 @@ func run() int {
 	root.SilenceErrors = true
 	root.SilenceUsage = true
 
-	if err := root.Execute(); err != nil {
-		// The command already rendered the error through the output writer,
-		// which is the only place that knows whether stdout wants JSON. All
-		// that is left is the exit status.
+	// ExecuteC rather than Execute, because on a parse failure it returns the
+	// command cobra had got as far as. That is what lets the error below name
+	// the right --help.
+	cmd, err := root.ExecuteC()
+	if err == nil {
+		return 0
+	}
+
+	// A handler's error has already been rendered, by the output writer, which
+	// is the only thing that knows whether stdout wants JSON. Only the exit
+	// status is left.
+	var handled *clierr.Error
+	if errors.As(err, &handled) {
 		return clierr.ExitCodeOf(err)
 	}
-	return 0
+
+	// Anything else came from cobra, before a command ran: an unknown flag, an
+	// unknown subcommand, a missing argument. Nothing has printed it.
+	//
+	// This used to fall through to `return clierr.ExitCodeOf(err)`, which gave
+	// exit 1 and no output whatsoever. A silent non-zero exit is the worst
+	// possible answer to a mistyped flag: a person sees nothing, and an agent
+	// cannot tell a typo from a crash. Flag typos are also the most common
+	// mistake there is, so this path is anything but rare.
+	return renderStartupFailure(err, exec, cmd)
+}
+
+// renderStartupFailure prints an invocation cobra refused, and returns its exit
+// code.
+//
+// It goes through the ordinary writer so that machine mode still receives the
+// usual error envelope on stdout rather than a bare line of prose on stderr.
+func renderStartupFailure(err error, exec execctx.Context, cmd *cobra.Command) int {
+	path := "outplane"
+	if cmd != nil {
+		path = cmd.CommandPath()
+	}
+
+	wrapped := clierr.New(clierr.KindUsage, "%v", err).
+		WithCode("usage.invalid_invocation").
+		WithHint("Run `%s --help` to see what this command accepts.", path).
+		WithStep("see the accepted flags and arguments", strings.Fields(path+" --help")...)
+
+	return output.New(cmd.OutOrStdout(), cmd.ErrOrStderr(), exec).Error(wrapped)
 }
 
 // globalOverrides collects the flags that apply to every command. They are
@@ -124,6 +163,12 @@ func newRoot(exec *execctx.Context) *cobra.Command {
 			help.Render(cmd.OutOrStdout(), decl, registry.GlobalFlags())
 			return
 		}
+		// A group, such as `outplane app --help`. Showing the whole command
+		// surface here would discard the narrowing the reader just did.
+		if cmd != root && cmd.HasSubCommands() {
+			printGroupHelp(cmd.OutOrStdout(), cmd.Name())
+			return
+		}
 		printRootHelp(cmd.OutOrStdout())
 	})
 
@@ -154,6 +199,7 @@ func attach(root *cobra.Command, decl registry.Command, exec *execctx.Context, g
 		Aliases:            aliasLeaves(decl.Aliases),
 		DisableSuggestions: true,
 		SilenceUsage:       true,
+		Args:               positionalArgs(decl),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return execute(cmd.Context(), decl, args, cmd, exec, g)
 		},
@@ -172,11 +218,52 @@ func attach(root *cobra.Command, decl registry.Command, exec *execctx.Context, g
 	parent.AddCommand(leaf)
 }
 
+// positionalArgs enforces the argument count a command declared.
+//
+// Without this, cobra accepts any number of positional arguments and a handler
+// reading req.Args[0] panics on an empty slice. `outplane team use` with no
+// team did exactly that, printing a Go stack trace where it should have printed
+// one sentence. The declaration already says which arguments are required; this
+// is what makes that declaration bind.
+//
+// The error is a plain error rather than a *clierr.Error on purpose. It is
+// raised before any command runs, so nothing has rendered it, and run() renders
+// exactly the errors that are not already clierr values. Returning one here
+// would make run() assume it had been printed, and the message would vanish.
+func positionalArgs(decl registry.Command) cobra.PositionalArgs {
+	required := 0
+	variadic := false
+	for _, a := range decl.Args {
+		if a.Required {
+			required++
+		}
+		if a.Variadic {
+			variadic = true
+		}
+	}
+
+	return func(_ *cobra.Command, args []string) error {
+		if len(args) < required {
+			return fmt.Errorf("missing required argument <%s>", decl.Args[len(args)].Name)
+		}
+		if !variadic && len(args) > len(decl.Args) {
+			return fmt.Errorf("unexpected argument %q", args[len(decl.Args)])
+		}
+		return nil
+	}
+}
+
 // childOrGroup finds an existing subcommand by name, or creates a group.
 //
 // A group is not runnable: `outplane app` on its own prints help, because
 // there is no sensible default action and guessing one would be worse than
 // asking.
+//
+// NoArgs is what makes `outplane app remove` fail. Cobra's default for a
+// command with children is to accept any leftover word and quietly run the
+// parent, so an invented subcommand printed help and exited 0. Success is the
+// worst answer to give an agent that hallucinated a command name: it learns
+// nothing, and whatever it expected to happen did not.
 func childOrGroup(parent *cobra.Command, name string) *cobra.Command {
 	for _, c := range parent.Commands() {
 		if c.Name() == name {
@@ -188,9 +275,53 @@ func childOrGroup(parent *cobra.Command, name string) *cobra.Command {
 		Short:              "manage " + name + "s",
 		DisableSuggestions: true,
 		SilenceUsage:       true,
+		Args:               cobra.NoArgs,
+		// A RunE is needed even though a group does nothing, because cobra
+		// short-circuits a command it considers unrunnable: it prints help and
+		// returns nil BEFORE validating arguments, so NoArgs above would never
+		// be consulted and `outplane app remove` would exit 0. Being runnable
+		// is what puts the argument check back in the path.
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			printGroupHelp(cmd.OutOrStdout(), cmd.Name())
+			return nil
+		},
 	}
 	parent.AddCommand(group)
 	return group
+}
+
+// printGroupHelp lists the commands inside one group.
+//
+// Separate from printRootHelp because somebody who typed `outplane app` has
+// already narrowed things down, and answering with the entire command surface
+// throws that away.
+func printGroupHelp(w interface{ Write([]byte) (int, error) }, group string) {
+	fmt.Fprintf(w, "Commands for managing %ss.\n\n", group)
+	fmt.Fprintln(w, "USAGE")
+	fmt.Fprintf(w, "  outplane %s <command> [flags]\n", group)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "COMMANDS")
+
+	for _, c := range sortedCommands() {
+		if len(c.Path) > 1 && c.Path[0] == group {
+			fmt.Fprintf(w, "  %-24s %s\n", strings.Join(c.Path, " "), c.Short)
+		}
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "LEARN MORE")
+	fmt.Fprintf(w, "  outplane %s <command> --help   detailed help, with runnable examples\n", group)
+	fmt.Fprintln(w)
+}
+
+// sortedCommands returns the registry in a stable display order, so that help
+// and the group listing cannot drift apart.
+func sortedCommands() []registry.Command {
+	out := append([]registry.Command(nil), registry.Commands...)
+	sort.Slice(out, func(i, j int) bool {
+		return strings.Join(out[i].Path, " ") < strings.Join(out[j].Path, " ")
+	})
+	return out
 }
 
 // aliasLeaves converts full alias paths to the last segment, which is what
@@ -399,16 +530,8 @@ func printRootHelp(w interface{ Write([]byte) (int, error) }) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "COMMANDS")
 
-	names := make([]string, 0, len(registry.Commands))
-	byName := map[string]string{}
-	for _, c := range registry.Commands {
-		n := strings.Join(c.Path, " ")
-		names = append(names, n)
-		byName[n] = c.Short
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		fmt.Fprintf(w, "  %-24s %s\n", n, byName[n])
+	for _, c := range sortedCommands() {
+		fmt.Fprintf(w, "  %-24s %s\n", strings.Join(c.Path, " "), c.Short)
 	}
 
 	fmt.Fprintln(w)

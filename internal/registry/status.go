@@ -6,10 +6,10 @@ package registry
 // the answer surprises somebody, "which one won" is the only useful thing to
 // know. Every other command hides that chain; this one prints it.
 //
-// It is the network-touching counterpart to `whoami`. whoami reads the stored
-// token and never makes a request, which is what lets it answer while the API
-// is down. status verifies, which is what lets it say the token has been
-// revoked. Neither could do the other's job without becoming worse at its own.
+// Local, like `whoami`. The two differ in what they are for rather than in what
+// they touch: whoami answers "who am I" and exits 3 when there is no answer,
+// which is what a script wants; status answers "what is configured and where
+// did it come from" and always exits 0, which is what a person debugging wants.
 
 func init() {
 	Register(status())
@@ -22,9 +22,9 @@ func status() Command {
 		Long: "Reports the resolved context and where each part of it came from.\n\n" +
 			"A team can be selected six ways, and this shows which one is in effect. " +
 			"Run it whenever a command acts on a team you did not expect.\n\n" +
-			"Unless --offline is passed, it also makes one request to confirm the " +
-			"credential still works, because a token revoked in the console looks " +
-			"perfectly valid until something tries to use it.",
+			"Makes no network request, so it answers while the API is unreachable. " +
+			"That also means it cannot tell you a token has been revoked; expiry it " +
+			"can see, because the expiry is inside the token.",
 
 		Risk: RiskRead,
 		// Deliberately false, and this is the whole point of the command. "I
@@ -34,17 +34,6 @@ func status() Command {
 		RequiresAuth: false,
 		Session:      SessionAny,
 		Idempotent:   true,
-
-		APICalls: []string{"GET /api/LogMonitor/LogQueryVerify"},
-
-		Flags: []Flag{
-			{
-				Name:        "offline",
-				Type:        "bool",
-				Default:     "false",
-				Description: "skip the credential check and report only local state",
-			},
-		},
 
 		OutputFields: []Field{
 			{Name: "signedIn", Type: "bool", Description: "a credential was resolved"},
@@ -62,12 +51,6 @@ func status() Command {
 			{Name: "expired", Type: "bool"},
 			{Name: "apiUrl", Type: "string"},
 			{Name: "apiUrlSource", Type: "string"},
-			{
-				Name: "credentialValid",
-				Type: "bool | null",
-				Description: "the result of the check. null when --offline, " +
-					"or when the API could not be reached at all",
-			},
 			{
 				Name:        "problem",
 				Type:        "string | null",
@@ -89,36 +72,39 @@ func status() Command {
 				Risk:    RiskRead,
 			},
 			{
-				Title:   "check local state only, making no request",
-				Command: "outplane status --offline",
-				Argv:    []string{"outplane", "status", "--offline"},
+				Title:   "find out why a command used the wrong team",
+				Command: "outplane status --json --fields teamSlug,teamSource",
+				Argv:    []string{"outplane", "status", "--json", "--fields", "teamSlug,teamSource"},
 				Risk:    RiskRead,
+				OutputSample: map[string]any{
+					"teamSlug":   "acme",
+					"teamSource": "link file",
+				},
 			},
 			{
 				Title:   "decide in a script whether to sign in",
-				Command: "outplane status --json --fields signedIn,credentialValid",
-				Argv:    []string{"outplane", "status", "--json", "--fields", "signedIn,credentialValid"},
+				Command: "outplane status --json --fields signedIn,expired",
+				Argv:    []string{"outplane", "status", "--json", "--fields", "signedIn,expired"},
 				Risk:    RiskRead,
 				OutputSample: map[string]any{
-					"signedIn":        true,
-					"credentialValid": true,
+					"signedIn": true,
+					"expired":  false,
 				},
 			},
 		},
 
 		AutomationNotes: []string{
-			"This command exits 0 even when nothing is configured and even when the token " +
-				"is rejected. It is a report, not an assertion: the findings are in the " +
-				"fields. Use `outplane whoami`, which exits 3, to assert that a credential " +
-				"exists.",
-			"credentialValid is null rather than false when the API could not be reached. " +
-				"A network failure is not evidence that a token is bad, and treating the two " +
-				"the same is how a CI job deletes a working credential during an outage.",
+			"This command exits 0 even when nothing is configured. It is a report, not an " +
+				"assertion: the findings are in the fields. Use `outplane whoami`, which " +
+				"exits 3, to assert that a credential exists.",
 			"teamSource names the winner of the resolution chain. The order is: --token, " +
 				"OUTPLANE_TOKEN, --team, OUTPLANE_TEAM_ID, the directory link, then the team " +
 				"set by `outplane team use`.",
-			"With --offline no request is made, so credentialValid is null and an expired or " +
-				"revoked token is not detected.",
+			"No network request is made. expired is decoded from the token, so a token revoked " +
+				"in the console still reads as fine here and only fails on the next real " +
+				"command.",
+			"problem is a sentence for a human. Branch on the typed fields instead: signedIn, " +
+				"expired, teamSource.",
 		},
 
 		Related: []string{"whoami", "team list", "team use", "login", "link"},

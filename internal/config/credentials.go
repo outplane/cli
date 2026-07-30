@@ -266,7 +266,19 @@ func ForgetCredential(slug string) error {
 
 // TokenInfo is what can be learned from a token without asking the server.
 type TokenInfo struct {
-	TeamID     string
+	TeamID string
+
+	// TeamSlug is the team's name as people type it. It is a claim rather than
+	// something the CLI asks the server for, which is what makes signing in
+	// work with no network at all.
+	//
+	// Embedding it is safe because a slug is written once, when a team is
+	// created, and nothing ever changes it: renaming a team edits its Name and
+	// leaves the Slug alone. The team's Name is deliberately NOT a claim, for
+	// the mirror-image reason: it is editable, and a token outlives a rename by
+	// up to 180 days.
+	TeamSlug string
+
 	TokenID    string
 	ExpiresAt  time.Time
 	IsAPIToken bool
@@ -293,6 +305,9 @@ func InspectToken(token string) (TokenInfo, error) {
 	}
 	if v, ok := claims["team_id"].(string); ok {
 		info.TeamID = v
+	}
+	if v, ok := claims["team_slug"].(string); ok {
+		info.TeamSlug = v
 	}
 	if v, ok := claims["jti"].(string); ok {
 		info.TokenID = v

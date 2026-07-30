@@ -5,14 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
-	"github.com/outplane/cli/internal/api"
 	"github.com/outplane/cli/internal/clierr"
 	"github.com/outplane/cli/internal/config"
-	"github.com/outplane/cli/internal/core"
 	"github.com/outplane/cli/internal/output"
 	"github.com/pkg/browser"
 	"golang.org/x/term"
@@ -29,20 +26,19 @@ func init() {
 // own console rather than to production.
 const consoleTokensPath = "/settings/api-tokens"
 
-// login obtains a token and stores it against the team it belongs to.
+// login stores a token against the team it belongs to.
 //
-// The sequence is deliberate:
+// Entirely local. The token carries everything needed to file it: its team id,
+// its team's slug and its expiry are all claims, so signing in works on an
+// aeroplane and a first run needs nothing but a paste.
 //
-//  1. Get the token. From stdin for scripts, otherwise a masked prompt.
-//  2. Decode it locally to learn its team and expiry. This costs nothing and
-//     catches a mistyped paste before a request is made.
-//  3. Call the API to prove it actually works, and to learn the team's slug,
-//     which is not in the token.
-//  4. Store it, keyed by that slug.
-//
-// Step 3 matters more than it looks. Without it, a revoked or truncated token
-// would be stored happily and fail later, somewhere less obvious.
-func login(ctx context.Context, req Request) (output.Table, error) {
+// There used to be a verification request here, which existed to learn the slug
+// rather than to verify: the slug was not a claim, and without it `--team acme`
+// would have had to be `--team 3f2a9c14-...`. Once the slug moved into the
+// token the request had no job left. It did catch a revoked token a few seconds
+// earlier than the first real command would, which is not worth a network
+// dependency on the one command a new user runs first.
+func login(_ context.Context, req Request) (output.Table, error) {
 	cli := req.CLI
 
 	token, err := readToken(req)
@@ -59,26 +55,17 @@ func login(ctx context.Context, req Request) (output.Table, error) {
 			WithStep("create a token in the console", "outplane", "login", "--no-browser")
 	}
 
-	// Verify against the API with this token specifically, not with whatever
-	// credential happened to be resolved for the invocation.
-	probe := api.New(api.Config{
-		BaseURL: cli.Config.APIURL.Value,
-		Token:   token,
-		TeamID:  info.TeamID,
-		Version: cli.Version(),
-		OSArch:  runtime.GOOS + "/" + runtime.GOARCH,
-		Timeout: 20 * time.Second,
-	})
-
-	slug, err := core.VerifyToken(ctx, probe)
-	if err != nil {
-		return output.Table{}, clierr.New(clierr.KindAuth, "this token was not accepted").
-			WithCode("auth.token_invalid").
-			WithHint("It may have been revoked, or it may have expired. "+
-				"Tokens are shown once when created and cannot be retrieved later.").
-			WithStep("create a new one", "outplane", "login").
-			WithDetail("reason", err.Error())
+	// A token minted before the slug became a claim. Rather than fall back to a
+	// network lookup, which would keep the dependency alive forever for a case
+	// that empties itself within one token lifetime, say what to do.
+	if info.TeamSlug == "" {
+		return output.Table{}, clierr.New(clierr.KindUsage, "this token does not name its team").
+			WithCode("auth.token_pre_slug").
+			WithHint("It was issued before tokens carried a team name. Create a new one; "+
+				"the old token keeps working for anything already using it.").
+			WithStep("create a replacement", "outplane", "login")
 	}
+	slug := info.TeamSlug
 
 	existing, alreadyStored := config.FindCredential(slug)
 	changed := !alreadyStored || existing.Token != token

@@ -43,12 +43,16 @@ func resolveTeamAndToken(ov Overrides, link *Link, profile Profile) (teamID, tea
 			return Value{}, Value{}, Value{}, decodeErr
 		}
 
-		// The slug is not in the token, only the id. If a credential for the
-		// same team is already stored, borrow its slug so that output can name
-		// the team rather than showing a bare GUID.
-		slug := ""
-		if c, ok := FindCredential(info.TeamID); ok {
-			slug = c.TeamSlug
+		// The token names its own team, so output can say "acme" rather than a
+		// bare GUID even for a credential this machine has never stored. A
+		// token minted before the slug became a claim carries only the id; if
+		// one happens to match a stored credential, borrow its slug, which
+		// costs a local read and nothing else.
+		slug := info.TeamSlug
+		if slug == "" {
+			if c, ok := FindCredential(info.TeamID); ok {
+				slug = c.TeamSlug
+			}
 		}
 
 		// COLLISION 1: a supplied token and an explicit --team that disagree.

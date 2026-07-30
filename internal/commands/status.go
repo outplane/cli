@@ -2,14 +2,8 @@ package commands
 
 import (
 	"context"
-	"errors"
-	"runtime"
-	"time"
 
-	"github.com/outplane/cli/internal/api"
-	"github.com/outplane/cli/internal/clierr"
 	"github.com/outplane/cli/internal/config"
-	"github.com/outplane/cli/internal/core"
 	"github.com/outplane/cli/internal/output"
 )
 
@@ -17,19 +11,23 @@ func init() {
 	register("status", status)
 }
 
-// statusTimeout is short on purpose. status is what somebody runs when things
-// are already wrong, and waiting thirty seconds to be told the network is down
-// is worse than being told in five.
-const statusTimeout = 8 * time.Second
-
 // status reports the resolved context and where each part of it came from.
 //
-// It never returns an error for the conditions it exists to describe. Not being
-// signed in, holding an expired token and being unable to reach the API are all
+// Entirely local, and fast enough to run without thinking about it. Everything
+// it reports is either a claim inside the token or a decision the CLI made
+// itself, so there is nothing to ask the server.
+//
+// It used to make one request to confirm the credential still worked. That was
+// dropped: the answer arrives anyway on the first real command, and a
+// diagnostic that hangs for eight seconds when the network is the problem is a
+// diagnostic people stop running.
+//
+// It never returns an error for the conditions it exists to describe. Not
+// signed in, an expired token and two inputs that contradict each other are all
 // findings, reported in fields, with exit 0. A diagnostic that refuses to run
-// when something is wrong is a diagnostic that is useless exactly when it is
-// needed; `whoami` is the command that asserts and exits 3.
-func status(ctx context.Context, req Request) (output.Table, error) {
+// when something is wrong is useless exactly when it is wanted; `whoami` is the
+// command that asserts, and it exits 3.
+func status(_ context.Context, req Request) (output.Table, error) {
 	cfg := req.CLI.Config
 
 	row := map[string]any{
@@ -43,7 +41,6 @@ func status(ctx context.Context, req Request) (output.Table, error) {
 		"expired":         false,
 		"apiUrl":          cfg.APIURL.Value,
 		"apiUrlSource":    string(cfg.APIURL.Source),
-		"credentialValid": nil,
 		"problem":         nil,
 		"linkedDirectory": nil,
 		"configDirectory": configDir(),
@@ -54,13 +51,15 @@ func status(ctx context.Context, req Request) (output.Table, error) {
 		row["linkedDirectory"] = cfg.Link.Path()
 	}
 
-	// No credential. Report why and stop: everything below needs one.
+	// No credential resolved. The reason is the whole answer, so report it and
+	// stop: every field below needs a credential to describe.
 	if cfg.TeamError != nil {
 		row["problem"] = cfg.TeamError.Error()
 		return statusTable(row), nil
 	}
 
 	expiresAt, daysLeft := config.ExpiryOf(cfg.Token.Value)
+	expired := expiresAt != "" && daysLeft < 0
 
 	row["signedIn"] = true
 	row["teamSlug"] = nilIfEmpty(cfg.TeamSlug.Value)
@@ -69,66 +68,16 @@ func status(ctx context.Context, req Request) (output.Table, error) {
 	row["tokenSource"] = string(cfg.Token.Source)
 	row["expiresAt"] = nilIfEmpty(expiresAt)
 	row["daysLeft"] = daysLeftValue(expiresAt, daysLeft)
-	row["expired"] = expiresAt != "" && daysLeft < 0
+	row["expired"] = expired
 
-	if req.Flags.Bool("offline") {
-		// credentialValid stays null. Not false: nothing was checked, and
-		// reporting an unchecked token as invalid would be a guess.
-		return statusTable(row), nil
-	}
-
-	slug, err := verifyCredential(ctx, req)
-	switch {
-	case err == nil:
-		row["credentialValid"] = true
-		// A token from the environment carries a team id but no slug, and this
-		// is the one command that goes and finds out. whoami cannot, because it
-		// promises to make no request.
-		if cfg.TeamSlug.Value == "" && slug != "" {
-			row["teamSlug"] = slug
-		}
-
-	case isAuthFailure(err):
-		row["credentialValid"] = false
-		row["problem"] = "the token was rejected. It may have been revoked or expired"
-
-	default:
-		// Unreachable, not rejected. credentialValid stays null, because a
-		// network failure is not evidence about a token, and treating the two
-		// alike is how a pipeline discards a working credential during an
-		// outage.
-		row["problem"] = "could not reach the API, so the token was not checked: " + err.Error()
+	// Expiry is the one failure that can be seen without asking, so it is the
+	// one this command can name. A revoked token still reads as fine here and
+	// will announce itself on the next request.
+	if expired {
+		row["problem"] = "this token expired on " + shortDate(expiresAt)
 	}
 
 	return statusTable(row), nil
-}
-
-// verifyCredential makes the one request status is allowed, with its own short
-// deadline rather than the client default.
-func verifyCredential(ctx context.Context, req Request) (string, error) {
-	cfg := req.CLI.Config
-
-	client := api.New(api.Config{
-		BaseURL: cfg.APIURL.Value,
-		Token:   cfg.Token.Value,
-		TeamID:  cfg.TeamID.Value,
-		Version: req.CLI.Version(),
-		OSArch:  runtime.GOOS + "/" + runtime.GOARCH,
-		Timeout: statusTimeout,
-	})
-	return core.VerifyToken(ctx, client)
-}
-
-// isAuthFailure distinguishes a rejected token from an unreachable server.
-//
-// The difference decides whether credentialValid is false or null, which is the
-// difference between "replace this token" and "try again later".
-func isAuthFailure(err error) bool {
-	var e *clierr.Error
-	if !errors.As(err, &e) {
-		return false
-	}
-	return e.Kind == clierr.KindAuth
 }
 
 func statusTable(row map[string]any) output.Table {
@@ -137,7 +86,7 @@ func statusTable(row map[string]any) output.Table {
 		Columns: []string{
 			"signedIn", "teamSlug", "teamId", "teamSource", "tokenSource",
 			"expiresAt", "daysLeft", "expired",
-			"apiUrl", "apiUrlSource", "credentialValid", "problem",
+			"apiUrl", "apiUrlSource", "problem",
 			"linkedDirectory", "configDirectory", "version",
 		},
 		Total: 1,

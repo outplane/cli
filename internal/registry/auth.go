@@ -30,7 +30,9 @@ func login() Command {
 		Long: "Signs in by storing an API token for one team.\n\n" +
 			"Tokens are created in the console, where your teams are listed. Run this " +
 			"again to sign in to a second team; existing credentials are kept, and " +
-			"`outplane team use` switches between them.",
+			"`outplane team use` switches between them.\n\n" +
+			"Makes no network request. The token names its own team, so the only thing " +
+			"signing in does is file it.",
 
 		Risk: RiskWrite,
 		// The whole point of this command is to obtain a credential, so it
@@ -39,8 +41,6 @@ func login() Command {
 		Session:      SessionAny,
 		// Signing in with the same token twice leaves the same state.
 		Idempotent: true,
-
-		APICalls: []string{"GET /api/LogMonitor/LogQueryVerify"},
 
 		// The team comes from the console, so a team flag here would be an
 		// option that does nothing. See the note at the top of this file.
@@ -75,8 +75,8 @@ func login() Command {
 			{Name: "changed", Type: "bool", Description: "false when this credential was already stored"},
 		},
 
-		ErrorCodes: []string{"auth.token_invalid", "auth.token_malformed"},
-		ExitCodes:  []int{0, 2, 3, 8},
+		ErrorCodes: []string{"auth.token_malformed", "auth.token_pre_slug"},
+		ExitCodes:  []int{0, 2},
 
 		Examples: []Example{
 			{
@@ -107,6 +107,8 @@ func login() Command {
 			"The console shows a token once, when it is created. It cannot be retrieved " +
 				"afterwards, only revoked and replaced.",
 			"There is no team flag: the team is chosen in the console.",
+			"No request is made, so a revoked token is stored without complaint and fails " +
+				"on the first command that uses it. Malformed input is still rejected here.",
 		},
 
 		Related: []string{"logout", "whoami", "team list", "team use", "status"},
