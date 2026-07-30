@@ -82,6 +82,19 @@ func (c *Context) Version() string { return c.version }
 // teams that ARE available, so the fix is visible without running another
 // command.
 func signInError(err error) error {
+	// An explicit token and an explicit --team that name different teams. This
+	// is a usage error, not an auth failure: both inputs are valid, they just
+	// contradict each other, and only the caller can say which they meant.
+	var conflict *config.TeamTokenConflictError
+	if errors.As(err, &conflict) {
+		return clierr.New(clierr.KindUsage, "%v", conflict).
+			WithCode("context.team_token_conflict").
+			WithHint("A token belongs to exactly one team, so --team cannot redirect it.").
+			WithStep("use the token's own team", "outplane", "app", "list").
+			WithStep("or use the stored credential for that team instead",
+				"unset", "OUTPLANE_TOKEN")
+	}
+
 	var notSignedIn *config.TeamNotSignedInError
 	if !errors.As(err, &notSignedIn) {
 		return clierr.New(clierr.KindAuth, "%v", err).WithCode("auth.not_authenticated")

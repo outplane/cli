@@ -167,11 +167,26 @@ func Resolve(ov Overrides) (Resolved, error) {
 	// header with team B's token and reporting a confusing 403.
 	r.TeamID, r.TeamSlug, r.Token, r.TeamError = resolveTeamAndToken(ov, link, profile)
 
-	r.AppID = pick(
-		Value{ov.App, SourceFlag},
-		Value{os.Getenv("OUTPLANE_APP_ID"), SourceEnv},
-		linkValue(link, func(l *Link) string { return l.AppID }),
-	)
+	// COLLISION 2: an explicit team that is not the linked directory's team.
+	//
+	// The link file records an app id AND the team it belongs to. If the caller
+	// names a different team, that app id is meaningless: an app belongs to one
+	// team, so carrying it across would send a stranger's id to the server and
+	// produce a 404 that blames the wrong thing.
+	//
+	// The link's app is therefore dropped, not translated. An explicit --team
+	// says "operate on that team", and the honest reading of that is "and not
+	// on this directory's app".
+	linkAppUsable := link != nil && teamsAgree(link, r.TeamID.Value, r.TeamSlug.Value)
+
+	appCandidates := []Value{
+		{ov.App, SourceFlag},
+		{os.Getenv("OUTPLANE_APP_ID"), SourceEnv},
+	}
+	if linkAppUsable {
+		appCandidates = append(appCandidates, linkValue(link, func(l *Link) string { return l.AppID }))
+	}
+	r.AppID = pick(appCandidates...)
 
 	return r, nil
 }
@@ -377,4 +392,23 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// teamsAgree reports whether a link file refers to the team that was resolved
+// for this invocation.
+//
+// A link written before the team was ever recorded (no teamId, no teamSlug) is
+// treated as agreeing: it predates this check, and refusing to use it would
+// break directories linked by an earlier version for no safety gain.
+func teamsAgree(link *Link, teamID, teamSlug string) bool {
+	if link.TeamID == "" && link.TeamSlug == "" {
+		return true
+	}
+	if link.TeamID != "" && link.TeamID == teamID {
+		return true
+	}
+	if link.TeamSlug != "" && teamSlug != "" && link.TeamSlug == teamSlug {
+		return true
+	}
+	return false
 }

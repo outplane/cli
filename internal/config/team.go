@@ -31,7 +31,8 @@ import (
 // A failure here is returned rather than thrown, because commands that need no
 // credential must still run.
 func resolveTeamAndToken(ov Overrides, link *Link, profile Profile) (teamID, teamSlug, token Value, err error) {
-	// 1 and 2: an explicit token answers everything.
+	// 1 and 2: an explicit token answers everything, because its own claim
+	// says which team it belongs to.
 	if raw := firstNonEmpty(ov.Token, os.Getenv("OUTPLANE_TOKEN")); raw != "" {
 		source := SourceEnv
 		if ov.Token != "" {
@@ -41,6 +42,7 @@ func resolveTeamAndToken(ov Overrides, link *Link, profile Profile) (teamID, tea
 		if decodeErr != nil {
 			return Value{}, Value{}, Value{}, decodeErr
 		}
+
 		// The slug is not in the token, only the id. If a credential for the
 		// same team is already stored, borrow its slug so that output can name
 		// the team rather than showing a bare GUID.
@@ -48,6 +50,21 @@ func resolveTeamAndToken(ov Overrides, link *Link, profile Profile) (teamID, tea
 		if c, ok := FindCredential(info.TeamID); ok {
 			slug = c.TeamSlug
 		}
+
+		// COLLISION 1: a supplied token and an explicit --team that disagree.
+		//
+		// This must be a hard error, never a silent preference. Both inputs are
+		// explicit statements of intent, and picking one would mean acting on a
+		// team the caller did not ask for. In CI that is how a deploy lands in
+		// the wrong place with a green tick.
+		if ov.Team != "" && !teamMatches(ov.Team, info.TeamID, slug) {
+			return Value{}, Value{}, Value{}, &TeamTokenConflictError{
+				RequestedTeam: ov.Team,
+				TokenTeamID:   info.TeamID,
+				TokenTeamSlug: slug,
+			}
+		}
+
 		return Value{info.TeamID, SourceToken},
 			Value{slug, SourceToken},
 			Value{raw, source},
@@ -138,4 +155,33 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// teamMatches reports whether a user-supplied team reference identifies the
+// team a token belongs to. Slug or id, because a person types one and a script
+// usually holds the other.
+func teamMatches(ref, teamID, teamSlug string) bool {
+	return ref == teamID || (teamSlug != "" && ref == teamSlug)
+}
+
+// TeamTokenConflictError is raised when an explicit token and an explicit
+// --team name different teams.
+//
+// It exists as its own type so the message can show both sides. "team
+// mismatch" would leave the caller guessing which of their two inputs was
+// wrong.
+type TeamTokenConflictError struct {
+	RequestedTeam string
+	TokenTeamID   string
+	TokenTeamSlug string
+}
+
+func (e *TeamTokenConflictError) Error() string {
+	tokenTeam := e.TokenTeamSlug
+	if tokenTeam == "" {
+		tokenTeam = e.TokenTeamID
+	}
+	return fmt.Sprintf(
+		"--team %s was given, but the supplied token belongs to team %s",
+		e.RequestedTeam, tokenTeam)
 }
