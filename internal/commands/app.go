@@ -29,23 +29,28 @@ func appList(ctx context.Context, req Request) (output.Table, error) {
 	}
 
 	// Column order is the order a person scans: what it is called, whether it
-	// is healthy, how big it is, where to reach it. The id is available in
-	// JSON but is not shown in the table, because a GUID takes a third of the
-	// terminal width and nobody reads one.
+	// is healthy, how many of it there are, how big each one is. The id and the
+	// timestamps are in the JSON but not in the table, because a GUID eats a
+	// third of the terminal width and nobody reads one.
+	//
+	// deploymentStatus is likewise JSON-only. It repeats status for every app
+	// that is not paused, so as a column it would be noise on most rows and
+	// useful on almost none.
 	table := output.Table{
-		Columns: []string{"name", "status", "instances", "size", "url"},
+		Columns: []string{"name", "status", "instances", "size"},
 		Total:   len(apps),
 	}
 	for _, a := range apps {
 		table.Rows = append(table.Rows, map[string]any{
-			"id":          a.ID,
-			"name":        a.Name,
-			"displayName": a.DisplayName,
-			"status":      a.Status,
-			"instances":   a.Instances,
-			"size":        a.Size,
-			"url":         a.URL,
-			"updatedAt":   a.UpdatedAt,
+			"id":               a.ID,
+			"name":             a.Name,
+			"displayName":      a.DisplayName,
+			"status":           a.Status,
+			"deploymentStatus": a.DeploymentStatus,
+			"paused":           a.Paused,
+			"instances":        a.Instances,
+			"size":             a.Size,
+			"updatedAt":        a.UpdatedAt,
 		})
 	}
 	return table, nil

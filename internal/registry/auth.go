@@ -188,12 +188,25 @@ func whoami() Command {
 		Idempotent:   true,
 
 		OutputFields: []Field{
-			{Name: "teamSlug", Type: "string"},
-			{Name: "teamId", Type: "string"},
-			{Name: "tokenName", Type: "string", Description: "the label shown in the console"},
-			{Name: "expiresAt", Type: "string | null"},
+			{
+				Name: "teamSlug",
+				Type: "string | null",
+				Description: "null for a token supplied through the environment, " +
+					"which carries a team id but no slug",
+			},
+			{Name: "teamId", Type: "string", Description: "always present"},
+			{
+				Name:        "tokenName",
+				Type:        "string | null",
+				Description: "the label shown in the console, for a stored credential",
+			},
+			{Name: "expiresAt", Type: "string | null", Description: "RFC 3339, read from the token"},
 			{Name: "daysLeft", Type: "int", Description: "-1 when the token never expires"},
-			{Name: "source", Type: "string", Description: "where the credential came from"},
+			{
+				Name:        "source",
+				Type:        "string",
+				Description: "where the credential came from (environment | config file | flag)",
+			},
 		},
 
 		ErrorCodes: []string{"auth.not_authenticated", "auth.team_not_signed_in"},
@@ -224,6 +237,8 @@ func whoami() Command {
 		AutomationNotes: []string{
 			"No network request is made. Expiry is read from the token itself, so a " +
 				"token revoked in the console still appears here until a command uses it.",
+			"With OUTPLANE_TOKEN set, teamSlug is null: a slug is only learned by signing " +
+				"in, and teamId is the identifier every API call actually uses.",
 		},
 
 		Related: []string{"status", "team list", "login"},

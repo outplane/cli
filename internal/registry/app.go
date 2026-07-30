@@ -52,11 +52,25 @@ func appList() Command {
 			{Name: "id", Type: "string"},
 			{Name: "name", Type: "string", Description: "immutable internal name, used in URLs"},
 			{Name: "displayName", Type: "string", Description: "editable label, may be empty"},
-			{Name: "status", Type: "string"},
-			{Name: "instances", Type: "int", Description: "configured replica count, 1 to 5"},
+			{
+				Name: "status",
+				Type: "string",
+				Description: "effective state: paused, ready, building, deploying, queued, " +
+					"failed, crashed, canceled. The field to branch on",
+			},
+			{
+				Name:        "deploymentStatus",
+				Type:        "string",
+				Description: "last deployment's own state, which pausing does not change",
+			},
+			{Name: "paused", Type: "bool"},
+			{
+				Name:        "instances",
+				Type:        "int",
+				Description: "configured replica count, 1 to 5. Unchanged by pausing",
+			},
 			{Name: "size", Type: "string", Description: "instance type code, e.g. op-20"},
-			{Name: "url", Type: "string | null", Description: "public URL, if a public HTTP port exists"},
-			{Name: "updatedAt", Type: "string", Description: "RFC 3339"},
+			{Name: "updatedAt", Type: "string", Description: "RFC 3339, UTC"},
 		},
 
 		ErrorCodes: []string{"context.no_team", "auth.token_invalid"},
@@ -76,8 +90,8 @@ func appList() Command {
 				Risk:    RiskRead,
 				OutputSample: map[string]any{
 					"items": []any{
-						map[string]any{"name": "checkout", "status": "Running"},
-						map[string]any{"name": "worker", "status": "Running"},
+						map[string]any{"name": "checkout", "status": "ready"},
+						map[string]any{"name": "worker", "status": "paused"},
 					},
 					"total":     2,
 					"truncated": false,
@@ -96,6 +110,16 @@ func appList() Command {
 			"The API returns every application in one response. There is no pagination, " +
 				"so `total` is the complete count and `truncated` is always false.",
 			"--search filters the response on the client. It does not reduce what is fetched.",
+			"A paused app reports status \"paused\", not the state of its last deployment. " +
+				"Filtering on status \"ready\" therefore never returns a stopped app; read " +
+				"deploymentStatus to see what it will return to.",
+			"status \"ready\" describes the last deployment, not a health check. An app can be " +
+				"ready and still be serving errors.",
+			"An unrecognised state decodes to \"unknown:N\", carrying the number the server sent. " +
+				"This is how a new platform state reaches an older CLI; treat it as unknown " +
+				"rather than as a failure.",
+			"This command reports no URL. A public address needs the app's port, which is a " +
+				"separate request per app, so listing does not fetch one.",
 		},
 
 		Related: []string{"app get", "app instances", "deploy list", "status"},

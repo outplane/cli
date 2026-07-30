@@ -26,11 +26,25 @@ type App struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	DisplayName string `json:"displayName"`
-	Status      string `json:"status"`
-	Instances   int    `json:"instances"`
-	Size        string `json:"size"`
-	URL         string `json:"url"`
-	UpdatedAt   string `json:"updatedAt"`
+
+	// Status is the app's effective state and is the field to branch on.
+	//
+	// Pausing outranks the deployment status here, which mirrors the console's
+	// rule: a paused app goes on reporting whatever its last deployment ended
+	// as, so a caller reading DeploymentStatus alone would call a stopped app
+	// "ready" and act on it.
+	Status string `json:"status"`
+
+	// DeploymentStatus is the raw state of the last deployment, kept so that
+	// pausing hides nothing. For a paused app this is what it will return to.
+	DeploymentStatus string `json:"deploymentStatus"`
+	Paused           bool   `json:"paused"`
+
+	// Instances is the configured replica count, which does not change when an
+	// app is paused. Whether it is currently running is what Status says.
+	Instances int    `json:"instances"`
+	Size      string `json:"size"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 // appOverviewDTO is the wire shape of GET /App/GetAppsByTeamId.
@@ -38,15 +52,29 @@ type App struct {
 // Field names follow the API's camelCase output. Unknown fields are ignored by
 // encoding/json, which is what makes an older CLI survive a server that has
 // started returning more: a new field is additive and invisible here.
+//
+// There is no URL in this response, and none can be derived from it. A public
+// address is {name}-{port}-{teamSlug}.outplane.app, the port comes from the
+// app's endpoints, and endpoints are a separate request per app. Listing
+// therefore reports no URL rather than guessing one that would 404, or turning
+// one list call into one call per application.
 type appOverviewDTO struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	DisplayName      string `json:"displayName"`
-	Status           string `json:"status"`
-	MinScale         int    `json:"minScale"`
-	InstanceType     string `json:"instanceType"`
-	URL              string `json:"url"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+
+	// Status is an AppDeploymentStatus, and it arrives as an integer: the API
+	// serialises enums by value. Decoding lives in enum.go.
+	Status   int  `json:"status"`
+	IsPaused bool `json:"isPaused"`
+
+	MinScale     int    `json:"minScale"`
+	InstanceType string `json:"instanceType"`
+
+	// LastModifiedDate stays null until an app is first changed, so CreatedDate
+	// is read as the fallback. The console pairs these two the same way.
 	LastModifiedDate string `json:"lastModifiedDate"`
+	CreatedDate      string `json:"createdDate"`
 }
 
 // ListApps returns every application in the current team.
@@ -66,15 +94,29 @@ func ListApps(ctx context.Context, c *api.Client, search string) ([]App, error) 
 		if !matches(d, search) {
 			continue
 		}
+		deployment := deploymentStatusNames.name(d.Status)
+
+		// See App.Status: pausing outranks the deployment state.
+		status := deployment
+		if d.IsPaused {
+			status = "paused"
+		}
+
+		updated := d.LastModifiedDate
+		if updated == "" {
+			updated = d.CreatedDate
+		}
+
 		apps = append(apps, App{
-			ID:          d.ID,
-			Name:        d.Name,
-			DisplayName: d.DisplayName,
-			Status:      d.Status,
-			Instances:   d.MinScale,
-			Size:        d.InstanceType,
-			URL:         d.URL,
-			UpdatedAt:   d.LastModifiedDate,
+			ID:               d.ID,
+			Name:             d.Name,
+			DisplayName:      d.DisplayName,
+			Status:           status,
+			DeploymentStatus: deployment,
+			Paused:           d.IsPaused,
+			Instances:        d.MinScale,
+			Size:             d.InstanceType,
+			UpdatedAt:        serverInstant(updated),
 		})
 	}
 	return apps, nil

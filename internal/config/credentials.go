@@ -95,6 +95,25 @@ func (c Credential) DaysLeft() int {
 	return int(time.Until(t).Hours() / 24)
 }
 
+// ExpiryOf reports when a token expires, reading the token itself.
+//
+// The token is the authority on its own lifetime. A stored credential keeps a
+// copy of the expiry so that listing teams does not have to decode anything,
+// but a token supplied through OUTPLANE_TOKEN has no stored copy at all, and
+// answering "never expires" for one that expires next week is precisely the
+// wrong answer to give somebody deciding whether to rotate it.
+//
+// daysLeft is -1 when the token carries no expiry, matching DaysLeft. A token
+// that cannot be decoded reports the same, because a caller that reached this
+// point holds a token every other command is about to fail on regardless.
+func ExpiryOf(token string) (expiresAt string, daysLeft int) {
+	info, err := InspectToken(token)
+	if err != nil || info.ExpiresAt.IsZero() {
+		return "", -1
+	}
+	return info.ExpiresAt.Format(time.RFC3339), int(time.Until(info.ExpiresAt).Hours() / 24)
+}
+
 func credentialsPath() (string, error) {
 	dir, err := Dir()
 	if err != nil {

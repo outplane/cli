@@ -291,16 +291,27 @@ func whoami(_ context.Context, req Request) (output.Table, error) {
 	slug := req.CLI.Config.TeamSlug.Value
 	cred, _ := config.FindCredential(slug)
 
+	// Expiry is read from the token in use rather than from the credential
+	// stored beside it. A token supplied through the environment has no stored
+	// credential, so trusting that copy would report "never expires" for a
+	// token that expires next week. See config.ExpiryOf.
+	expiresAt, daysLeft := config.ExpiryOf(req.CLI.Config.Token.Value)
+
 	return output.Table{
 		Single:  true,
 		Columns: []string{"teamSlug", "teamId", "tokenName", "expiresAt", "daysLeft", "source"},
 		Total:   1,
 		Rows: []map[string]any{{
-			"teamSlug":  firstNonEmpty(slug, req.CLI.Config.TeamID.Value),
+			// Null, not the team id, when no slug is known. A slug is only
+			// learned by signing in, and an environment token never does. The
+			// id is right there in the next field; putting it here too would
+			// hand a caller a GUID that looks like a slug and does not work as
+			// one wherever slugs are accepted.
+			"teamSlug":  nilIfEmpty(slug),
 			"teamId":    req.CLI.Config.TeamID.Value,
 			"tokenName": nilIfEmpty(cred.Name),
-			"expiresAt": nilIfEmpty(cred.ExpiresAt),
-			"daysLeft":  cred.DaysLeft(),
+			"expiresAt": nilIfEmpty(expiresAt),
+			"daysLeft":  daysLeft,
 			"source":    string(req.CLI.Config.Token.Source),
 		}},
 	}, nil
@@ -315,11 +326,3 @@ func nilIfEmpty(s string) any {
 	return s
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
