@@ -70,6 +70,12 @@ func appList() Command {
 				Description: "configured replica count, 1 to 5. Unchanged by pausing",
 			},
 			{Name: "size", Type: "string", Description: "instance type code, e.g. op-20"},
+			{
+				Name: "source",
+				Type: "string",
+				Description: "where the image comes from: github, container-registry, " +
+					"or unknown:N for a provider this release predates",
+			},
 			{Name: "updatedAt", Type: "string", Description: "RFC 3339, UTC"},
 		},
 

@@ -47,6 +47,12 @@ type App struct {
 	Instances int    `json:"instances"`
 	Size      string `json:"size"`
 	UpdatedAt string `json:"updatedAt"`
+
+	// Source is where the app's image comes from: "github" or
+	// "container-registry". It decides whether an explicit image reference
+	// means anything, so `deploy --image` can refuse a Git-sourced app here
+	// rather than after a round trip.
+	Source string `json:"source"`
 }
 
 // appOverviewDTO is the wire shape of GET /App/GetAppsByTeamId.
@@ -69,6 +75,9 @@ type appOverviewDTO struct {
 	// serialises enums by value. Decoding lives in enum.go.
 	Status   int  `json:"status"`
 	IsPaused bool `json:"isPaused"`
+
+	// SourceProvider is a SourceProvider enum, as an integer. See enum.go.
+	SourceProvider int `json:"sourceProvider"`
 
 	MinScale     int    `json:"minScale"`
 	InstanceType string `json:"instanceType"`
@@ -119,6 +128,7 @@ func ListApps(ctx context.Context, c *api.Client, search string) ([]App, error) 
 			Instances:        d.MinScale,
 			Size:             d.InstanceType,
 			UpdatedAt:        serverInstant(updated),
+			Source:           sourceProviderNames.name(d.SourceProvider),
 		})
 	}
 	return apps, nil

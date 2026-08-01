@@ -50,6 +50,7 @@ func appList(ctx context.Context, req Request) (output.Table, error) {
 			"paused":           a.Paused,
 			"instances":        a.Instances,
 			"size":             a.Size,
+			"source":           a.Source,
 			"updatedAt":        a.UpdatedAt,
 		})
 	}
