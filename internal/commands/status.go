@@ -40,8 +40,6 @@ func status(_ context.Context, req Request) (output.Table, error) {
 		"expiresAt":       nil,
 		"daysLeft":        nil,
 		"expired":         false,
-		"apiUrl":          cfg.APIURL.Value,
-		"apiUrlSource":    string(cfg.APIURL.Source),
 		"problem":         nil,
 		"linkedDirectory": nil,
 		"configDirectory": configDir(),
@@ -93,8 +91,7 @@ func statusTable(row map[string]any) output.Table {
 		Single: true,
 		Columns: []string{
 			"signedIn", "teamSlug", "teamId", "teamSource", "tokenSource",
-			"expiresAt", "daysLeft", "expired",
-			"apiUrl", "apiUrlSource", "problem",
+			"expiresAt", "daysLeft", "expired", "problem",
 			"linkedDirectory", "configDirectory", "version",
 		},
 		Total: 1,

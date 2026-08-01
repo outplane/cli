@@ -18,7 +18,7 @@ func init() {
 func status() Command {
 	return Command{
 		Path:  []string{"status"},
-		Short: "show which team, token and API the next command will use",
+		Short: "show which team and credential the next command will use",
 		Long: "Reports the resolved context and where each part of it came from.\n\n" +
 			"A team can be selected six ways, and this shows which one is in effect. " +
 			"Run it whenever a command acts on a team you did not expect.\n\n" +
@@ -49,8 +49,6 @@ func status() Command {
 			{Name: "expiresAt", Type: "string | null", Description: "RFC 3339, read from the token"},
 			{Name: "daysLeft", Type: "int | null", Description: "null when the token never expires, negative once it has passed"},
 			{Name: "expired", Type: "bool"},
-			{Name: "apiUrl", Type: "string"},
-			{Name: "apiUrlSource", Type: "string"},
 			{
 				Name:        "problem",
 				Type:        "string | null",
