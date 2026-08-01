@@ -162,7 +162,7 @@ func (c *Client) GetAbsolute(ctx context.Context, rawURL string) ([]byte, error)
 		// No envelope to unwrap, so the status is all there is to go on. The
 		// body is kept in details rather than printed: it is somebody else's
 		// error format and may be an HTML page from a proxy.
-		return nil, toError(resp.StatusCode, envelope{}, requestID(resp)).
+		return nil, toHostError(resp.StatusCode, envelope{}, requestID(resp), hostOf(rawURL)).
 			WithDetail("responseBody", truncate(string(raw), 500))
 	}
 	return raw, nil
@@ -266,6 +266,15 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 //     internal path. Those are replaced with a generic sentence plus a request
 //     id, and there is no flag to reveal them.
 func toError(status int, env envelope, reqID string) *clierr.Error {
+	return toHostError(status, env, reqID, "the Out Plane API")
+}
+
+// toHostError is toError for a response from a host that is not the API.
+//
+// Only the 5xx wording differs, and it matters: "the Out Plane API failed" sent
+// a reader to check a service that was working while the log or metrics gateway
+// was the one returning 500.
+func toHostError(status int, env envelope, reqID string, host string) *clierr.Error {
 	apiMessage := ""
 	if env.Error != nil && len(env.Error.Errors) > 0 {
 		apiMessage = strings.Join(env.Error.Errors, "; ")
@@ -356,7 +365,7 @@ func toError(status int, env envelope, reqID string) *clierr.Error {
 		// Deliberately generic. The server's message here is whatever
 		// exception happened to escape, and it is not safe to print.
 		e := clierr.New(clierr.KindUpstream,
-			"the Out Plane API failed to handle this request (HTTP %d)", status).
+			"%s failed to handle this request (HTTP %d)", host, status).
 			WithHint("This is a problem on our side, not with the command.").
 			WithRequestID(reqID)
 		if apiMessage != "" {

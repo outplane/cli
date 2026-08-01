@@ -33,6 +33,24 @@ const (
 	FormatNDJSON Format = "ndjson"
 )
 
+// Formats is every value --output accepts, in the order the help lists them.
+var Formats = []Format{FormatAuto, FormatText, FormatJSON, FormatNDJSON}
+
+// ParseFormat validates what --output was given.
+//
+// An unrecognised value is an error rather than a fallback to text. A fallback
+// is the worst of both: `--output jsonl` would print a table and exit 0, so a
+// consumer parsing stdout as JSON fails on data that looks like a result, and
+// a person reading the exit code concludes the command worked.
+func ParseFormat(s string) (Format, bool) {
+	for _, f := range Formats {
+		if Format(s) == f {
+			return f, true
+		}
+	}
+	return "", false
+}
+
 // Context describes the environment a single invocation runs in.
 //
 // It is a plain value. Copy it freely; nothing here is a handle to anything.

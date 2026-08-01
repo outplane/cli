@@ -171,6 +171,11 @@ func resolveApp(ctx context.Context, req Request, ref string) (core.App, error) 
 // resolution order from drifting between them.
 func targetApp(ctx context.Context, req Request, command ...string) (core.App, error) {
 	if len(req.Args) > 0 {
+		// See emptyAppArgument: an empty argument is an unset variable, not a
+		// request for the default.
+		if strings.TrimSpace(req.Args[0]) == "" {
+			return core.App{}, emptyAppArgument()
+		}
 		return resolveApp(ctx, req, req.Args[0])
 	}
 

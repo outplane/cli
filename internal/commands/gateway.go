@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/outplane/cli/internal/api"
@@ -77,12 +78,19 @@ func openGateway(req Request) (gateway, error) {
 // every other command would pass it straight through.
 func gatewayApp(ctx context.Context, req Request) (string, error) {
 	ref := ""
-	if len(req.Args) > 0 {
+	switch {
+	case len(req.Args) > 0:
+		// An argument that is present but empty is not the same as no argument.
+		// `outplane metrics "$APP"` with APP unset would otherwise report the
+		// whole team, which is a different answer to the one that was asked
+		// for and looks exactly like a correct one.
+		if strings.TrimSpace(req.Args[0]) == "" {
+			return "", emptyAppArgument()
+		}
 		ref = req.Args[0]
-	} else if id := req.CLI.Config.AppID.Value; id != "" {
-		ref = id
-	}
-	if ref == "" {
+	case req.CLI.Config.AppID.Value != "":
+		ref = req.CLI.Config.AppID.Value
+	default:
 		return "", nil
 	}
 
@@ -91,6 +99,17 @@ func gatewayApp(ctx context.Context, req Request) (string, error) {
 		return "", err
 	}
 	return app.Name, nil
+}
+
+// emptyAppArgument is what an unset shell variable looks like when it reaches
+// the CLI. It is reported rather than ignored, in every command that takes an
+// application, because ignoring it silently widens the question.
+func emptyAppArgument() error {
+	return clierr.New(clierr.KindUsage, "the application argument is empty").
+		WithCode("usage.empty_argument").
+		WithHint("This is what an unset variable looks like. Omit the argument entirely "+
+			"to ask about every application.").
+		WithStep("see what this team has", "outplane", "app", "list")
 }
 
 // buildWindow reads --since and --lines.

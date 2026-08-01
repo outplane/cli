@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/outplane/cli/internal/api"
+	"github.com/outplane/cli/internal/clierr"
 )
 
 // Resource usage, from the metrics gateway.
@@ -155,7 +157,14 @@ func QueryUsage(ctx context.Context, c *api.Client, base string, apps []App) ([]
 	for _, q := range usageQueries() {
 		samples, err := promInstant(ctx, c, base, q.query)
 		if err != nil {
-			return nil, fmt.Errorf("could not read %s: %w", q.name, err)
+			// Which metric failed goes in a detail rather than in the message.
+			// Wrapping with fmt.Errorf hid the typed error underneath, so the
+			// whole failure was reported as "internal": a CLI bug, rather than
+			// the gateway problem it is.
+			if e := clierr.AsError(err); e != nil {
+				return nil, e.WithDetail("metric", q.name)
+			}
+			return nil, err
 		}
 		for app, v := range samples {
 			if i, ok := index[app]; ok {
@@ -201,9 +210,18 @@ type promResponse struct {
 
 // promInstant runs one instant query and returns a value per application.
 //
-// A sample whose value does not parse is dropped rather than reported as zero.
-// Prometheus writes NaN for a series it cannot compute, and a NaN rendered as
-// 0% CPU is a wrong answer where no answer was available.
+// A sample the CLI cannot use is dropped rather than reported. Three shapes get
+// here and none of them is a reading:
+//
+//   - NaN, which Prometheus writes for a series it could not compute. Go parses
+//     it happily, which is how it used to arrive as a confident 0.
+//   - +Inf, from a division by zero upstream. Converted to an integer it became
+//     9223372036854775807 millicores: not a large number, a fictional one.
+//   - a negative value, which no counter rate or byte count can be.
+//
+// Dropping one leaves the application at zero, the same as an application with
+// nothing running. That is a real loss of nuance and still the better trade: a
+// missing reading reads as idle, while a fabricated one reads as an emergency.
 func promInstant(ctx context.Context, c *api.Client, base, query string) (map[string]float64, error) {
 	path := fmt.Sprintf("%s/api/v1/query?%s",
 		strings.TrimRight(base, "/"), url.Values{"query": {query}}.Encode())
@@ -213,12 +231,20 @@ func promInstant(ctx context.Context, c *api.Client, base, query string) (map[st
 		return nil, err
 	}
 
+	// Both of these are the gateway's failure, not the CLI's, and the kind is
+	// what an agent branches on: "internal" says file a bug, "upstream" says the
+	// service is unhappy and the command may be worth retrying.
 	var resp promResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("the metrics gateway returned something unexpected: %w", err)
+		return nil, clierr.New(clierr.KindUpstream,
+			"the metrics gateway returned something this release cannot read").
+			WithCode("metrics.bad_response").
+			WithDetail("parseError", err.Error())
 	}
 	if resp.Status == "error" {
-		return nil, fmt.Errorf("the metrics gateway refused the query: %s", resp.Error)
+		return nil, clierr.New(clierr.KindUpstream, "the metrics gateway refused the query").
+			WithCode("metrics.query_refused").
+			WithDetail("gatewayError", resp.Error)
 	}
 
 	out := make(map[string]float64, len(resp.Data.Result))
@@ -232,7 +258,7 @@ func promInstant(ctx context.Context, c *api.Client, base, query string) (map[st
 			continue
 		}
 		v, err := strconv.ParseFloat(text, 64)
-		if err != nil {
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
 			continue
 		}
 		out[app] = v

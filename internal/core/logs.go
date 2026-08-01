@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/outplane/cli/internal/api"
+	"github.com/outplane/cli/internal/clierr"
 )
 
 // LogLine is one line an application wrote.
@@ -95,7 +96,10 @@ func queryRange(ctx context.Context, c *api.Client, base, teamSlug, query string
 
 	var resp logResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("the log gateway returned something unexpected: %w", err)
+		return nil, clierr.New(clierr.KindUpstream,
+			"the log gateway returned something this release cannot read").
+			WithCode("logs.bad_response").
+			WithDetail("parseError", err.Error())
 	}
 
 	var entries []entry

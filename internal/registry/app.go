@@ -255,7 +255,7 @@ func appGet() Command {
 			},
 		},
 
-		ErrorCodes: []string{"app.not_found", "app.ambiguous", "context.no_app", "context.no_team"},
+		ErrorCodes: []string{"app.not_found", "app.ambiguous", "context.no_app", "usage.empty_argument", "context.no_team"},
 		ExitCodes:  []int{0, 2, 3, 5, 8},
 
 		Examples: []Example{

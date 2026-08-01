@@ -386,7 +386,12 @@ func execute(
 	exec *execctx.Context,
 	g *globalOverrides,
 ) error {
-	applyGlobals(exec, g)
+	// Before anything else, because the answer decides how every later failure
+	// is rendered. A bad format is reported in text, which is the only thing
+	// that can be trusted when the requested format is the thing that is wrong.
+	if err := applyGlobals(exec, g); err != nil {
+		return finish(output.New(cmd.OutOrStdout(), cmd.ErrOrStderr(), *exec).Error(err), err)
+	}
 
 	rt, err := cli.Build(*exec, config.Overrides{
 		APIURL: g.apiURL,
@@ -514,17 +519,33 @@ func renderAndReturn(_ any, err error, exec execctx.Context, cmd *cobra.Command)
 
 // applyGlobals folds the parsed global flags into the execution context, so
 // that every later decision reads one struct instead of consulting flags.
-func applyGlobals(exec *execctx.Context, g *globalOverrides) {
+func applyGlobals(exec *execctx.Context, g *globalOverrides) error {
 	if g.asJSON {
 		exec.RequestedFormat = execctx.FormatJSON
 	} else if g.output != "" && g.output != "auto" {
-		exec.RequestedFormat = execctx.Format(g.output)
+		format, ok := execctx.ParseFormat(g.output)
+		if !ok {
+			return clierr.New(clierr.KindUsage, "no output format called %q", g.output).
+				WithCode("usage.bad_output").
+				WithHint("Use one of: %s.", strings.Join(formatNames(), ", ")).
+				WithDetail("availableFormats", formatNames())
+		}
+		exec.RequestedFormat = format
 	}
 	exec.Quiet = g.quiet
 	exec.AssumeYes = g.yes
 	if g.noColor {
 		exec.NoColour = true
 	}
+	return nil
+}
+
+func formatNames() []string {
+	names := make([]string, 0, len(execctx.Formats))
+	for _, f := range execctx.Formats {
+		names = append(names, string(f))
+	}
+	return names
 }
 
 func splitFields(s string) []string {

@@ -96,7 +96,7 @@ func logs() Command {
 		// The output is the lines themselves, written as they arrive.
 		OutputFields: nil,
 
-		ErrorCodes: []string{"logs.no_team_slug", "app.not_found", "usage.bad_level"},
+		ErrorCodes: []string{"logs.no_team_slug", "app.not_found", "usage.bad_level", "usage.empty_argument", "logs.bad_response"},
 		ExitCodes:  []int{0, 2, 3, 5, 8, 130},
 
 		Examples: []Example{

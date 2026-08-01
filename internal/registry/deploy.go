@@ -126,6 +126,7 @@ func deployCreate() Command {
 			"app.not_found",
 			"app.ambiguous",
 			"context.no_app",
+			"usage.empty_argument",
 			"quota.limit_reached",
 		},
 		ExitCodes: []int{0, 2, 3, 5, 7, 8, 124},

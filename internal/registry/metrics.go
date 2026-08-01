@@ -76,8 +76,15 @@ func metrics() Command {
 			{Name: "memoryLimitMb", Type: "int", Description: "what one instance may use"},
 		},
 
-		ErrorCodes: []string{"logs.no_team_slug", "app.not_found", "context.no_team"},
-		ExitCodes:  []int{0, 2, 3, 5, 8},
+		ErrorCodes: []string{
+			"logs.no_team_slug",
+			"app.not_found",
+			"usage.empty_argument",
+			"metrics.bad_response",
+			"metrics.query_refused",
+			"context.no_team",
+		},
+		ExitCodes: []int{0, 2, 3, 5, 8},
 
 		Examples: []Example{
 			{

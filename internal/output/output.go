@@ -389,7 +389,19 @@ func (w *Writer) Note(format string, args ...any) {
 func (t Table) selectFields(fields []string) (Table, error) {
 	available := t.fieldNames()
 
-	out := Table{Total: t.Total, Truncated: t.Truncated, Single: t.Single}
+	// Everything that describes how to present a column travels with it. Losing
+	// the units here is what made `metrics --fields memoryBytes` print
+	// 741425152 where the same command without --fields prints 707 MiB: the
+	// narrowed table was a new one that had forgotten how to write a byte.
+	out := Table{
+		Total:     t.Total,
+		Truncated: t.Truncated,
+		Single:    t.Single,
+		Footer:    t.Footer,
+		Headers:   t.Headers,
+		Units:     t.Units,
+		Declared:  t.Declared,
+	}
 	seen := make(map[string]bool, len(fields))
 
 	// Requested order wins over declared order, because a caller who wrote

@@ -137,6 +137,8 @@ func requests() Command {
 			"app.not_found",
 			"usage.bad_status",
 			"usage.bad_method",
+			"usage.empty_argument",
+			"logs.bad_response",
 			"usage.bad_duration",
 		},
 		ExitCodes: []int{0, 2, 3, 5, 8, 130},
