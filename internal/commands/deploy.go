@@ -34,7 +34,7 @@ func deployCreate(ctx context.Context, req Request) (output.Table, error) {
 		return output.Table{}, err
 	}
 
-	app, err := resolveDeployTarget(ctx, req)
+	app, err := targetApp(ctx, req, "deploy", "create")
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -80,25 +80,6 @@ func deployCreate(ctx context.Context, req Request) (output.Table, error) {
 	return deployTable(app, deployment, true), nil
 }
 
-// resolveDeployTarget picks the application to deploy: the argument if given,
-// otherwise the directory's linked app.
-func resolveDeployTarget(ctx context.Context, req Request) (core.App, error) {
-	if len(req.Args) > 0 {
-		return resolveApp(ctx, req, req.Args[0])
-	}
-
-	if id := req.CLI.Config.AppID.Value; id != "" {
-		return resolveApp(ctx, req, id)
-	}
-
-	return core.App{}, clierr.New(clierr.KindUsage, "no application given, and this directory is not linked to one").
-		WithCode("context.no_app").
-		WithHint("Name the application, or link the directory once and omit it afterwards.").
-		WithStep("deploy a named application", "outplane", "deploy", "create", "<APP_NAME>").
-		WithStep("or link this directory", "outplane", "link", "<APP_NAME>").
-		WithStep("see what this team has", "outplane", "app", "list")
-}
-
 // checkImageAllowed refuses an image reference for an app that is not built
 // from one.
 //
@@ -107,7 +88,7 @@ func resolveDeployTarget(ctx context.Context, req Request) (core.App, error) {
 // which a round trip returning "ImageName override is only supported for
 // container registry sources" cannot.
 func checkImageAllowed(app core.App, imageRef string) error {
-	if imageRef == "" || app.Source == "container-registry" {
+	if imageRef == "" || app.Source == core.SourceContainerRegistry {
 		return nil
 	}
 	return clierr.New(clierr.KindUsage,
@@ -198,7 +179,7 @@ func finish(req Request, app core.App, d core.Deployment) (core.Deployment, erro
 	// never had a build, and sending somebody to `deploy logs` for it lands
 	// them on "no build output", which reads as a second failure rather than as
 	// the wrong question.
-	if app.Source == "container-registry" {
+	if app.Source == core.SourceContainerRegistry {
 		return d, e.
 			WithHint("This app deploys a ready-made image, so nothing was built. The image "+
 				"could not be pulled, or it started and stopped.").

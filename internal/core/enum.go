@@ -54,6 +54,13 @@ var buildMethodNames = enumNames{
 	30: "prebuilt-image",
 }
 
+// How a port is served, from EndpointScheme.
+var schemeNames = enumNames{
+	10: "http",
+	20: "h2c",
+	30: "tcp",
+}
+
 // Where an app's source comes from, from SourceProvider.
 //
 // The gap between 10 and 200 is where two further providers are declared and
@@ -62,5 +69,14 @@ var buildMethodNames = enumNames{
 // catches up, which is the intended behaviour rather than a bug to pre-empt.
 var sourceProviderNames = enumNames{
 	10:  "github",
-	200: "container-registry",
+	200: SourceContainerRegistry,
 }
+
+// SourceContainerRegistry is the decoded provider that deploys a ready-made
+// image rather than building one.
+//
+// Several commands branch on it: an image reference means something only for
+// this source, a failed deployment of one has no build output to read, and its
+// "repository" is an image name. It is a constant so that those three places
+// cannot disagree about the spelling.
+const SourceContainerRegistry = "container-registry"

@@ -14,6 +14,7 @@
 package output
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -184,9 +185,7 @@ func (w *Writer) ndjson(t Table) error {
 func (w *Writer) text(t Table) error {
 	if len(t.Rows) == 0 {
 		fmt.Fprintln(w.Err, "No results.")
-		if t.Footer != "" {
-			fmt.Fprintf(w.Err, "\n%s\n", t.Footer)
-		}
+		w.footer(t)
 		return nil
 	}
 
@@ -202,6 +201,7 @@ func (w *Writer) text(t Table) error {
 		for _, c := range t.Columns {
 			w.labelled(width, c, format(t.Rows[0][c]))
 		}
+		w.footer(t)
 		return nil
 	}
 
@@ -234,10 +234,23 @@ func (w *Writer) text(t Table) error {
 	if t.Truncated {
 		fmt.Fprintf(w.Err, "\nShowing %d of %d. The result was truncated.\n", len(t.Rows), t.Total)
 	}
-	if t.Footer != "" {
-		fmt.Fprintf(w.Err, "\n%s\n", t.Footer)
-	}
+	w.footer(t)
 	return nil
+}
+
+// footer writes the closing sentence, if there is one.
+//
+// It is a function rather than three copies because the text layouts all end
+// differently and the single-object one silently forgot it: a command whose
+// footer said "this app serves more ports than shown" printed nothing at all.
+//
+// A footer is prose for a person, so --quiet silences it on the same grounds
+// as Note: what it says is never the result, only a pointer to more of it.
+func (w *Writer) footer(t Table) {
+	if t.Footer == "" || w.Ctx.Quiet {
+		return
+	}
+	fmt.Fprintf(w.Err, "\n%s\n", t.Footer)
 }
 
 // Error renders a failure and returns the process exit code.
@@ -452,8 +465,25 @@ func format(v any) string {
 		}
 		return "no"
 	default:
-		return fmt.Sprint(x)
+		return compact(x)
 	}
+}
+
+// compact renders a value that is not a string, a bool or nil.
+//
+// Numbers pass through unchanged. Anything structured is printed as JSON,
+// because Go's own rendering of a nested value is Go syntax: an endpoint list
+// comes out as `[map[port:3000 public:false url:<nil>]]`, which names no format
+// a reader can paste anywhere. The same value in --json is the JSON, so this
+// keeps one shape across both.
+func compact(v any) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return fmt.Sprint(v)
+	}
+	return strings.TrimRight(buf.String(), "\n")
 }
 
 func pad(s string, width int) string {

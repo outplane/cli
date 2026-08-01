@@ -233,3 +233,193 @@ func matches(d appOverviewDTO, search string) bool {
 	return strings.Contains(strings.ToLower(d.Name), needle) ||
 		strings.Contains(strings.ToLower(d.DisplayName), needle)
 }
+
+// AppDetail is one application, with what the list cannot afford to fetch.
+//
+// The list endpoint returns every application in one response and so cannot
+// carry per-application detail; this is a second request for one of them. The
+// difference that matters is Endpoints, and through them the public address,
+// which is the question `app list` deliberately leaves unanswered.
+type AppDetail struct {
+	App
+
+	// Repository and ImageRef are the two forms a source takes, and exactly one
+	// of them is ever set. The API keeps both in a single column, so an app
+	// built from a container image reports "nginx:latest" as its repository;
+	// splitting them here means a reader never has to know that, and matches
+	// the branch/imageRef pair a deployment already reports.
+	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
+	ImageRef   string `json:"imageRef"`
+	SourceURL  string `json:"sourceUrl"`
+
+	// PublicSource says the repository needs no credential to read. It is
+	// always true for a container-registry app, which has no repository.
+	PublicSource bool `json:"publicSource"`
+
+	BuildMethod  string `json:"buildMethod"`
+	Directory    string `json:"directory"`
+	StartCommand string `json:"startCommand"`
+
+	// URL is where the app can be reached, which is what somebody means by "the
+	// app's URL". Endpoints has the rest.
+	URL       string     `json:"url"`
+	Endpoints []Endpoint `json:"endpoints"`
+
+	CommitMessage  string `json:"commitMessage"`
+	LastDeployedAt string `json:"lastDeployedAt"`
+	CreatedAt      string `json:"createdAt"`
+}
+
+// Endpoint is one port an application serves.
+type Endpoint struct {
+	Port   int    `json:"port"`
+	Scheme string `json:"scheme"`
+	Public bool   `json:"public"`
+
+	// URL is the platform address for this port, present only while the port is
+	// public. A private port with a custom domain is still reachable, at that
+	// domain and nowhere else.
+	URL string `json:"url"`
+
+	// CustomDomains are full addresses rather than bare host names, because the
+	// scheme and the path are both configurable per domain and a host name on
+	// its own is not something a reader can open or curl.
+	CustomDomains []string `json:"customDomains"`
+}
+
+type appDetailDTO struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+
+	SourceProvider   int    `json:"sourceProvider"`
+	SourceRepository string `json:"sourceRepository"`
+	SourceURL        string `json:"sourceUrl"`
+	IsPublicSource   bool   `json:"isPublicSource"`
+	DefaultBranch    string `json:"defaultBranch"`
+
+	BuildMethod  int    `json:"buildMethod"`
+	Directory    string `json:"directory"`
+	StartCommand string `json:"startCommand"`
+
+	MinScale     int    `json:"minScale"`
+	InstanceType string `json:"instanceType"`
+	IsPaused     bool   `json:"isPaused"`
+
+	LastDeploymentStatus int    `json:"lastDeploymentStatus"`
+	LastDeploymentDate   string `json:"lastDeploymentDate"`
+	CommitMessage        string `json:"commitMessage"`
+
+	CreatedDate      string `json:"createdDate"`
+	LastModifiedDate string `json:"lastModifiedDate"`
+
+	AppPorts []struct {
+		Port          int    `json:"port"`
+		Scheme        int    `json:"scheme"`
+		IsPublic      bool   `json:"isPublic"`
+		PublicURL     string `json:"publicUrl"`
+		CustomDomains []struct {
+			Domain string `json:"domain"`
+			Path   string `json:"path"`
+			SSL    bool   `json:"ssl"`
+		} `json:"customDomains"`
+	} `json:"appPorts"`
+}
+
+// GetApp fetches one application by id.
+func GetApp(ctx context.Context, c *api.Client, appID string) (AppDetail, error) {
+	var d appDetailDTO
+	if err := c.Get(ctx, "/App/GetAppById/"+appID, &d); err != nil {
+		return AppDetail{}, err
+	}
+
+	deployment := deploymentStatusNames.name(d.LastDeploymentStatus)
+	status := deployment
+	if d.IsPaused {
+		status = "paused"
+	}
+
+	updated := d.LastModifiedDate
+	if updated == "" {
+		updated = d.CreatedDate
+	}
+
+	detail := AppDetail{
+		App: App{
+			ID:               d.ID,
+			Name:             d.Name,
+			DisplayName:      d.DisplayName,
+			Status:           status,
+			DeploymentStatus: deployment,
+			Paused:           d.IsPaused,
+			Instances:        d.MinScale,
+			Size:             d.InstanceType,
+			UpdatedAt:        serverInstant(updated),
+			Source:           sourceProviderNames.name(d.SourceProvider),
+		},
+		Branch:         d.DefaultBranch,
+		SourceURL:      d.SourceURL,
+		PublicSource:   d.IsPublicSource,
+		BuildMethod:    buildMethodNames.name(d.BuildMethod),
+		Directory:      d.Directory,
+		StartCommand:   d.StartCommand,
+		CommitMessage:  d.CommitMessage,
+		LastDeployedAt: serverInstant(d.LastDeploymentDate),
+		CreatedAt:      serverInstant(d.CreatedDate),
+		Endpoints:      make([]Endpoint, 0, len(d.AppPorts)),
+	}
+
+	if detail.Source == SourceContainerRegistry {
+		detail.ImageRef = d.SourceRepository
+	} else {
+		detail.Repository = d.SourceRepository
+	}
+
+	for _, p := range d.AppPorts {
+		domains := make([]string, 0, len(p.CustomDomains))
+		for _, cd := range p.CustomDomains {
+			domains = append(domains, domainURL(cd.Domain, cd.Path, cd.SSL))
+		}
+		e := Endpoint{
+			Port:          p.Port,
+			Scheme:        schemeNames.name(p.Scheme),
+			Public:        p.IsPublic,
+			CustomDomains: domains,
+		}
+		if p.IsPublic {
+			e.URL = p.PublicURL
+		}
+		detail.Endpoints = append(detail.Endpoints, e)
+
+		// The first address the app answers on wins. The platform one is
+		// preferred because it always exists once a port is public; a custom
+		// domain is the fallback rather than the second choice, since a private
+		// port with a domain attached is reachable at that domain only, and
+		// reporting no URL for it would be wrong rather than cautious.
+		if detail.URL == "" {
+			if e.URL != "" {
+				detail.URL = e.URL
+			} else if len(domains) > 0 {
+				detail.URL = domains[0]
+			}
+		}
+	}
+
+	return detail, nil
+}
+
+// domainURL turns a custom domain record into an address that can be opened.
+//
+// The path is stored as "/" when there is none, and a URL ending in a bare
+// slash is noise, so that one case is trimmed and any real path is kept.
+func domainURL(domain, path string, ssl bool) string {
+	scheme := "http"
+	if ssl {
+		scheme = "https"
+	}
+	if path == "/" {
+		path = ""
+	}
+	return scheme + "://" + domain + path
+}

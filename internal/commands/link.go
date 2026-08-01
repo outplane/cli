@@ -162,6 +162,31 @@ func resolveApp(ctx context.Context, req Request, ref string) (core.App, error) 
 	return core.App{}, err
 }
 
+// targetApp resolves the application a command acts on: the argument if one was
+// given, otherwise the app this directory is linked to.
+//
+// The command's own words are passed in so the "nothing to act on" error can
+// offer the reader their own command back with a name in it. Every command
+// whose app argument is optional shares this, which is what keeps the
+// resolution order from drifting between them.
+func targetApp(ctx context.Context, req Request, command ...string) (core.App, error) {
+	if len(req.Args) > 0 {
+		return resolveApp(ctx, req, req.Args[0])
+	}
+
+	if id := req.CLI.Config.AppID.Value; id != "" {
+		return resolveApp(ctx, req, id)
+	}
+
+	named := append(append([]string{"outplane"}, command...), "<APP_NAME>")
+	return core.App{}, clierr.New(clierr.KindUsage, "no application given, and this directory is not linked to one").
+		WithCode("context.no_app").
+		WithHint("Name the application, or link the directory once and omit it afterwards.").
+		WithStep("name an application", named...).
+		WithStep("or link this directory", "outplane", "link", "<APP_NAME>").
+		WithStep("see what this team has", "outplane", "app", "list")
+}
+
 // unlink deletes the link that is in effect.
 //
 // It reports the path it deleted because the file may live in a parent

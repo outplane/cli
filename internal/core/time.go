@@ -27,6 +27,14 @@ func serverInstant(s string) string {
 		return ""
 	}
 
+	// A field the server declares as a plain date cannot be null, so "never
+	// happened" arrives as the zero value instead. Printing "0001-01-01" for an
+	// app that has never been deployed reads as a corrupt record; the honest
+	// answer is that there is no timestamp.
+	if strings.HasPrefix(s, "0001-01-01") {
+		return ""
+	}
+
 	// Only ISO-shaped values are assumed to be UTC. The API also emits
 	// "07/28/2026 20:10:51" in a couple of places, and guessing a zone for a
 	// format this one does not recognise would be inventing information.
