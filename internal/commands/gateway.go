@@ -129,10 +129,9 @@ func follow[T any](ctx context.Context, req Request, window core.LogWindow, curs
 		items, err := s.fetch(ctx, w)
 		if err != nil {
 			// An interrupt cancels the request that is in flight, and that
-			// failure is not a gateway problem. Reporting it as one would end
-			// every interrupted follow with a false alarm about the network.
-			if ctx.Err() != nil {
-				return clierr.New(clierr.KindInterrupted, "stopped following")
+			// failure is not a gateway problem.
+			if e := clierr.Cancelled(ctx, "stopped following"); e != nil {
+				return e
 			}
 			// One failed poll is not the end of the stream. The reader can see
 			// the gap and interrupt; giving up on a blip would be worse.

@@ -45,6 +45,12 @@ func deployLogs(ctx context.Context, req Request) (output.Table, error) {
 	for {
 		text, finished, err := reader.Next(ctx, client)
 		if err != nil {
+			// An interrupt cancels the read in flight. Without this the loop
+			// would take the cancelled read for the end of the build output
+			// and exit 0 on a command the reader stopped.
+			if e := clierr.Cancelled(ctx, "interrupted"); e != nil {
+				return output.Table{}, e
+			}
 			// Nothing has been printed yet, so this is the whole answer and it
 			// can be explained properly. Once output has started, a later
 			// failure ends the stream without pretending the earlier text was

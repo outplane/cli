@@ -146,6 +146,9 @@ func awaitDeployment(
 
 		next, err := core.GetDeployment(ctx, client, app.ID, current.ID)
 		if err != nil {
+			if e := clierr.Cancelled(ctx, "interrupted while waiting"); e != nil {
+				return current, e
+			}
 			// A single failed poll is not a failed deploy. Keep waiting; the
 			// timeout is what ends this loop when the server is truly gone.
 			req.CLI.Out.Note("Could not read the deployment status, retrying: %v", err)

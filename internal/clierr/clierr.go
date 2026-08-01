@@ -17,6 +17,7 @@
 package clierr
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -218,4 +219,23 @@ func AsError(err error) *Error {
 		Kind:    KindInternal,
 		Message: err.Error(),
 	}
+}
+
+// Cancelled turns an interrupted context into the error it actually is, or
+// returns nil when nothing was interrupted.
+//
+// Every loop that polls needs this. An interrupt cancels whatever request is in
+// flight, so the request fails, and a loop that reads that failure at face
+// value draws the wrong conclusion: at best it announces a network problem that
+// never happened, at worst it decides the stream ended normally and exits 0 on
+// a command the user cut short.
+//
+// It takes the message rather than inventing one because each loop knows what
+// it was doing: "stopped following" and "interrupted while waiting" are the
+// same event described from different commands.
+func Cancelled(ctx context.Context, message string) *Error {
+	if ctx.Err() == nil {
+		return nil
+	}
+	return New(KindInterrupted, "%s", message)
 }
