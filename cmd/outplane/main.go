@@ -412,6 +412,13 @@ func execute(
 		return finish(rt.Out.Error(err), err)
 	}
 
+	// Checked here rather than when the result is rendered, because a command
+	// that streams has already printed by then. See output.CheckFields.
+	if err := output.CheckFields(rt.Fields, declaredFields(decl)); err != nil {
+		return finish(rt.Out.Error(err), err)
+	}
+	rt.Out.Fields = rt.Fields
+
 	handler, ok := commands.Lookup(decl.Path)
 	if !ok {
 		// Declared but not implemented. Say so plainly: a command that

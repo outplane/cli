@@ -55,12 +55,25 @@ type LogWindow struct {
 	after string
 }
 
-// QueryLogs fetches an application's output.
+// entry is one line as the gateway returned it, before anything decides what
+// the line means.
 //
-// Lines come back newest-first from the gateway and are returned oldest-first,
-// because that is the order a log is read in. Sorting here rather than in the
-// caller keeps the follow loop's cursor arithmetic on the same data it prints.
-func QueryLogs(ctx context.Context, c *api.Client, base, teamSlug, query string, w LogWindow) ([]LogLine, error) {
+// The two commands that read this gateway want different things from the same
+// response: `logs` wants the text, `requests` wants the fields inside it. The
+// fetch, the window arithmetic and the ordering are identical for both, so they
+// happen once, here, and each command decodes what it needs afterwards.
+type entry struct {
+	atNs   string
+	line   string
+	labels map[string]string
+}
+
+// queryRange asks the gateway for one window.
+//
+// Entries come back newest-first and are returned oldest-first, because that is
+// the order a log is read in. Sorting here rather than in the callers keeps the
+// follow loop's cursor arithmetic on the same data it prints.
+func queryRange(ctx context.Context, c *api.Client, base, teamSlug, query string, w LogWindow) ([]entry, error) {
 	start, end := w.bounds(time.Now())
 
 	params := url.Values{}
@@ -85,31 +98,53 @@ func QueryLogs(ctx context.Context, c *api.Client, base, teamSlug, query string,
 		return nil, fmt.Errorf("the log gateway returned something unexpected: %w", err)
 	}
 
-	var lines []LogLine
+	var entries []entry
 	for _, stream := range resp.Data.Result {
-		app := stream.Stream["app_name"]
 		for _, v := range stream.Values {
-			lines = append(lines, LogLine{
-				At:   nsToTime(v[0]),
-				atNs: v[0],
-				Text: strings.TrimRight(v[1], "\n"),
-				App:  app,
-			})
+			entries = append(entries, entry{atNs: v[0], line: v[1], labels: stream.Stream})
 		}
 	}
 
 	// Oldest first. Streams arrive separately, so lines from two applications
 	// are interleaved only after this.
-	sort.SliceStable(lines, func(i, j int) bool { return lines[i].atNs < lines[j].atNs })
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].atNs < entries[j].atNs })
+	return entries, nil
+}
+
+// QueryLogs fetches an application's output.
+func QueryLogs(ctx context.Context, c *api.Client, base, teamSlug, query string, w LogWindow) ([]LogLine, error) {
+	entries, err := queryRange(ctx, c, base, teamSlug, query, w)
+	if err != nil {
+		return nil, err
+	}
+
+	lines := make([]LogLine, 0, len(entries))
+	for _, e := range entries {
+		lines = append(lines, LogLine{
+			At:   nsToTime(e.atNs),
+			atNs: e.atNs,
+			Text: strings.TrimRight(e.line, "\n"),
+			App:  e.labels["app_name"],
+		})
+	}
 	return lines, nil
 }
 
+// cursored is anything a follow loop can resume from.
+type cursored interface{ cursor() string }
+
+func (l LogLine) cursor() string { return l.atNs }
+
 // Cursor is the position to resume a follow from, or empty when there is none.
-func Cursor(lines []LogLine) string {
-	if len(lines) == 0 {
+//
+// It takes the last item rather than the newest timestamp because the entries
+// are already ordered, and re-deriving the maximum here would be a second place
+// that has to agree with queryRange about which end is newest.
+func Cursor[T cursored](items []T) string {
+	if len(items) == 0 {
 		return ""
 	}
-	return lines[len(lines)-1].atNs
+	return items[len(items)-1].cursor()
 }
 
 // After returns a window that asks only for lines newer than cursor.

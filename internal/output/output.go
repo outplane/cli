@@ -92,6 +92,14 @@ type Writer struct {
 	Err io.Writer
 	Ctx execctx.Context
 
+	// Fields is --fields, already validated against what the command declares.
+	//
+	// Result takes the same list as an argument, because it narrows a whole
+	// table at once. Item cannot: a stream is written record by record while
+	// the command is still running, so the narrowing has to be here rather
+	// than in something that sees the finished result.
+	Fields []string
+
 	// RawStream says stdout carries text this command did not shape: an
 	// application's own log lines, not a result the CLI built.
 	//
@@ -253,6 +261,36 @@ func (w *Writer) footer(t Table) {
 	fmt.Fprintf(w.Err, "\n%s\n", t.Footer)
 }
 
+// Item writes one record of a stream to stdout, as it arrives.
+//
+// Result renders a table that is complete; this is for output that is not, and
+// never will be: a follow has no end, so there is nothing to buffer and align.
+// The caller supplies both shapes because only it knows the columns, and the
+// choice between them belongs here with every other format decision.
+//
+// The text form is expected to be pre-aligned to fixed widths. A live stream
+// cannot size its columns from the rows it has not received yet, and columns
+// that jump on every poll are harder to read than columns that are too wide.
+func (w *Writer) Item(row map[string]any, text string) {
+	if !w.Ctx.Machine() {
+		// The text form has fixed columns and nothing to narrow. --fields
+		// applies to the objects, which is where it can mean something.
+		fmt.Fprintln(w.Out, text)
+		return
+	}
+
+	if len(w.Fields) > 0 {
+		row = narrow(row, w.Fields)
+	}
+
+	enc := json.NewEncoder(w.Out)
+	enc.SetEscapeHTML(false)
+	// One object per line, whatever the requested machine format. A stream
+	// cannot be a single JSON document: the closing bracket would only arrive
+	// when the command is interrupted, so nothing could parse it until then.
+	_ = enc.Encode(row)
+}
+
 // Error renders a failure and returns the process exit code.
 //
 // In a machine format the error envelope goes to STDOUT, replacing the result.
@@ -350,13 +388,22 @@ func (t Table) selectFields(fields []string) (Table, error) {
 	}
 
 	for _, row := range t.Rows {
-		narrowed := make(map[string]any, len(out.Columns))
-		for _, c := range out.Columns {
-			narrowed[c] = row[c]
-		}
-		out.Rows = append(out.Rows, narrowed)
+		out.Rows = append(out.Rows, narrow(row, out.Columns))
 	}
 	return out, nil
+}
+
+// narrow keeps only the named keys.
+//
+// A requested field the row does not carry becomes a null rather than a
+// missing key, so every record of a result has the same shape and a consumer
+// never has to test for absence.
+func narrow(row map[string]any, fields []string) map[string]any {
+	out := make(map[string]any, len(fields))
+	for _, f := range fields {
+		out[f] = row[f]
+	}
+	return out
 }
 
 // fieldNames is every field this result can offer.
@@ -379,6 +426,31 @@ func (t Table) fieldNames() map[string]bool {
 		}
 	}
 	return names
+}
+
+// CheckFields rejects a requested field the command does not offer.
+//
+// It runs before the command does, which is the only place it can run for a
+// command that streams: those write records as they arrive, so by the time
+// anything could inspect the result the wrong output is already on the screen.
+// Checking against the declared contract rather than against a response also
+// makes the answer independent of the data, so `--fields updatedAt` cannot be
+// accepted for one team and rejected for an empty one.
+func CheckFields(requested, declared []string) error {
+	if len(requested) == 0 {
+		return nil
+	}
+
+	available := make(map[string]bool, len(declared))
+	for _, f := range declared {
+		available[f] = true
+	}
+	for _, f := range requested {
+		if f = strings.TrimSpace(f); f != "" && !available[f] {
+			return unknownFieldError(f, available)
+		}
+	}
+	return nil
 }
 
 func unknownFieldError(field string, available map[string]bool) error {
