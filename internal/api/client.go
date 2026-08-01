@@ -130,6 +130,74 @@ func (c *Client) Delete(ctx context.Context, path string, out any) error {
 	return c.do(ctx, http.MethodDelete, path, nil, out)
 }
 
+// GetAbsolute fetches a full URL and returns the body untouched.
+//
+// It exists for the log gateway, which is a different host and does not speak
+// the API's response envelope: it answers with its own JSON, so the usual
+// decode would look for a "data" field that is not there and report an empty
+// result instead of a failure.
+//
+// The credential and team headers are the same ones the API gets, because the
+// gateway authorises against the same token.
+func (c *Client) GetAbsolute(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, clierr.New(clierr.KindInternal, "could not build request: %v", err)
+	}
+	c.setHeaders(req, false)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, transportError(err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, clierr.New(clierr.KindUpstream, "could not read the response: %v", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		// No envelope to unwrap, so the status is all there is to go on. The
+		// body is kept in details rather than printed: it is somebody else's
+		// error format and may be an HTML page from a proxy.
+		return nil, toError(resp.StatusCode, envelope{}, requestID(resp)).
+			WithDetail("responseBody", truncate(string(raw), 500))
+	}
+	return raw, nil
+}
+
+// setHeaders applies the credential, the team and the version to a request.
+//
+// Shared by both request paths so that a header added for one cannot be
+// forgotten on the other; the version header in particular decides whether the
+// server gates the request at all.
+func (c *Client) setHeaders(req *http.Request, hasBody bool) {
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent(c.version, c.osArch))
+	req.Header.Set(VersionHeader, c.version)
+	if hasBody {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	// Sent on every request, not only where it is needed: the header is checked
+	// before authentication, so omitting it produces a 400 that looks nothing
+	// like the real problem.
+	if c.teamID != "" {
+		req.Header.Set("X-Team-Id", c.teamID)
+	}
+}
+
+// truncate keeps a foreign error body short enough to travel in a detail field.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
@@ -145,29 +213,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return clierr.New(clierr.KindInternal, "could not build request: %v", err)
 	}
 
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", userAgent(c.version, c.osArch))
-	// The version travels in its own header as well as inside the User-Agent,
-	// because the server compares it. A User-Agent is free-form prose that
-	// proxies rewrite, so parsing a number out of one to decide whether to
-	// serve a request would be building a contract on top of a string nobody
-	// promised to leave alone.
-	//
-	// Sending it is also what puts this client in scope for the check at all:
-	// the API only gates requests that carry this header.
-	req.Header.Set(VersionHeader, c.version)
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	// Sent on every request, not only where it is needed. The header is
-	// validated before authentication, so omitting it produces a 400 that
-	// looks nothing like the real problem.
-	if c.teamID != "" {
-		req.Header.Set("X-Team-Id", c.teamID)
-	}
+	c.setHeaders(req, body != nil)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

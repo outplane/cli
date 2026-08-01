@@ -15,8 +15,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/outplane/cli/internal/cli"
 	"github.com/outplane/cli/internal/clierr"
@@ -54,6 +56,10 @@ func run() int {
 	root.SilenceErrors = true
 	root.SilenceUsage = true
 
+	ctx, stopSignals := interruptible()
+	defer stopSignals()
+	root.SetContext(ctx)
+
 	// ExecuteC rather than Execute, because on a parse failure it returns the
 	// command cobra had got as far as. That is what lets the error below name
 	// the right --help.
@@ -79,6 +85,33 @@ func run() int {
 	// cannot tell a typo from a crash. Flag typos are also the most common
 	// mistake there is, so this path is anything but rare.
 	return renderStartupFailure(err, exec, cmd)
+}
+
+// interruptible returns a context cancelled by the first interrupt, and leaves
+// a second one to kill the process.
+//
+// Without this every command ran under a context that is never cancelled, so
+// `outplane logs --follow` had a ctx.Done() branch that could not fire and an
+// exit code of 130 it could not produce. An interrupt still stopped the
+// process, because that is the runtime's default, but it stopped it mid
+// request rather than letting the command finish the line it was writing.
+//
+// The handler is removed after the first signal on purpose. A follow that is
+// slow to notice must still be killable, and a second interrupt that the CLI
+// swallowed would be worse than having no handler at all.
+func interruptible() (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-signals
+		signal.Stop(signals)
+		cancel()
+	}()
+
+	return ctx, func() { signal.Stop(signals); cancel() }
 }
 
 // renderStartupFailure prints an invocation cobra refused, and returns its exit
@@ -364,6 +397,9 @@ func execute(
 		return renderAndReturn(nil, err, *exec, cmd)
 	}
 	rt.DryRun = g.dryRun
+	// A command whose stdout is somebody else's text must not have an error
+	// envelope appended to it. See output.Writer.RawStream.
+	rt.Out.RawStream = decl.Streams == registry.StreamLines
 	if g.fields != "" {
 		rt.Fields = splitFields(g.fields)
 	}

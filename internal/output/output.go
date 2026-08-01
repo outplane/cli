@@ -90,6 +90,17 @@ type Writer struct {
 	Out io.Writer
 	Err io.Writer
 	Ctx execctx.Context
+
+	// RawStream says stdout carries text this command did not shape: an
+	// application's own log lines, not a result the CLI built.
+	//
+	// It changes where an error goes. Normally a machine-mode error is written
+	// to stdout so a consumer can parse one stream and find either a result or
+	// a failure. That reasoning does not survive here, because stdout is
+	// already raw text and an envelope appended to it is not parseable
+	// alongside the lines: `outplane logs -f > app.log` would end with a JSON
+	// object in the middle of the log file.
+	RawStream bool
 }
 
 // New builds a Writer for the given context.
@@ -246,7 +257,7 @@ func (w *Writer) Error(err error) int {
 		return 0
 	}
 
-	if w.Ctx.Machine() {
+	if w.Ctx.Machine() && !w.RawStream {
 		enc := json.NewEncoder(w.Out)
 		enc.SetIndent("", "  ")
 		enc.SetEscapeHTML(false)

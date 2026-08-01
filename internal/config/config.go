@@ -28,6 +28,13 @@ import (
 // DefaultAPIURL is where the CLI talks unless told otherwise.
 const DefaultAPIURL = "https://api.outplane.com/api"
 
+// DefaultLogURL is the gateway that serves an application's own output.
+//
+// A second host, not a path on the API: logs are read straight from the log
+// store's query interface, with the same bearer token and team header. Nothing
+// else in the CLI talks to it.
+const DefaultLogURL = "https://loki.outplane.com"
+
 // Source says where a resolved value came from. It exists so that every
 // setting can explain itself, which turns a class of confusing support
 // questions into a single command.
@@ -107,6 +114,7 @@ func (l Link) Path() string { return l.path }
 // Resolved is the complete answer to "what should this invocation do".
 type Resolved struct {
 	APIURL   Value
+	LogURL   Value
 	Token    Value
 	TeamID   Value
 	TeamSlug Value
@@ -173,6 +181,11 @@ func Resolve(ov Overrides) (Resolved, error) {
 		linkValue(link, func(l *Link) string { return l.APIURL }),
 		Value{profile.APIURL, SourceFile},
 		Value{DefaultAPIURL, SourceDefault},
+	)
+
+	r.LogURL = pick(
+		Value{os.Getenv("OUTPLANE_LOG_URL"), SourceEnv},
+		Value{DefaultLogURL, SourceDefault},
 	)
 
 	// Team and credential are resolved together, because with team-scoped
