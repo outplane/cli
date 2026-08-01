@@ -2,6 +2,8 @@
 
 Deploy and operate applications on Out Plane from your terminal.
 
+> **Early.** The command surface below is settled and will not change incompatibly, but not all of it is implemented yet. `outplane schema` always reports what this build actually does.
+
 ## Install
 
 macOS and Linux:
@@ -23,10 +25,10 @@ JavaScript application.
 ## Getting started
 
 ```bash
-outplane login                 # paste a token from the console, or use --browser
-outplane link --app checkout   # remember this directory's app
-outplane deploy create --wait  # build, deploy, and wait for the result
-outplane logs -f               # follow the running application's logs
+outplane login            # paste a token created in the console
+outplane link checkout    # remember this directory's team and app
+outplane status           # what the next command will act on, and why
+outplane app list         # everything in the current team
 ```
 
 ## For AI agents and CI
@@ -56,11 +58,10 @@ In CI, set `OUTPLANE_TOKEN` and skip the login step entirely.
 
 ## Contributing
 
-This repository is private. If you are changing the code, read
-[AGENTS.md](AGENTS.md) first: it explains the single-source-of-truth command
-registry and the invariants that are not negotiable.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. It explains the
+single-source-of-truth command registry, the layering, and the invariants that
+are not negotiable.
 
 ## License
 
-Proprietary. See [LICENSE](LICENSE). Binaries are free to download and use;
-the source is not public.
+[Apache-2.0](LICENSE). Copyright 2026 Out Plane LLC.

@@ -20,3 +20,7 @@
 # Local overrides. Never commit a real token.
 .env
 .env.local
+
+# Private working notes. Deliberately not tracked: this repository is public,
+# and this file holds development notes that are not.
+/AGENTS.md
