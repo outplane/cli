@@ -57,6 +57,12 @@ type App struct {
 	LastDeployedAt string `json:"lastDeployedAt"`
 	UpdatedAt      string `json:"updatedAt"`
 
+	// CPULimitMillicores and MemoryLimitMB are what one instance may use. They
+	// come from the instance type and are per pod rather than per app, which is
+	// what makes a usage percentage mean the same thing at any replica count.
+	CPULimitMillicores int `json:"cpuLimitMillicores"`
+	MemoryLimitMB      int `json:"memoryLimitMb"`
+
 	// Source is where the app's image comes from: "github" or
 	// "container-registry". It decides whether an explicit image reference
 	// means anything, so `deploy --image` can refuse a Git-sourced app here
@@ -88,8 +94,10 @@ type appOverviewDTO struct {
 	// SourceProvider is a SourceProvider enum, as an integer. See enum.go.
 	SourceProvider int `json:"sourceProvider"`
 
-	MinScale     int    `json:"minScale"`
-	InstanceType string `json:"instanceType"`
+	MinScale           int    `json:"minScale"`
+	InstanceType       string `json:"instanceType"`
+	CPULimitMillicores int    `json:"cpuLimitMillicores"`
+	MemoryLimitMB      int    `json:"memoryLimitMb"`
 
 	// LastModifiedDate stays null until an app is first changed, so CreatedDate
 	// is read as the fallback. The console pairs these two the same way.
@@ -144,17 +152,19 @@ func ListApps(ctx context.Context, c *api.Client, search string) ([]App, error) 
 		}
 
 		apps = append(apps, App{
-			ID:               d.ID,
-			Name:             d.Name,
-			DisplayName:      d.DisplayName,
-			Status:           status,
-			DeploymentStatus: deployment,
-			Paused:           d.IsPaused,
-			Instances:        d.MinScale,
-			Size:             d.InstanceType,
-			LastDeployedAt:   serverInstant(deployed),
-			UpdatedAt:        serverInstant(updated),
-			Source:           sourceProviderNames.name(d.SourceProvider),
+			ID:                 d.ID,
+			Name:               d.Name,
+			DisplayName:        d.DisplayName,
+			Status:             status,
+			DeploymentStatus:   deployment,
+			Paused:             d.IsPaused,
+			Instances:          d.MinScale,
+			Size:               d.InstanceType,
+			CPULimitMillicores: d.CPULimitMillicores,
+			MemoryLimitMB:      d.MemoryLimitMB,
+			LastDeployedAt:     serverInstant(deployed),
+			UpdatedAt:          serverInstant(updated),
+			Source:             sourceProviderNames.name(d.SourceProvider),
 		})
 	}
 	return apps, nil

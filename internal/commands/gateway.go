@@ -24,10 +24,15 @@ import (
 // all day is worth the delay nobody notices.
 const followInterval = 2 * time.Second
 
-// gateway is a resolved connection to the log gateway.
+// gateway is a resolved connection to the observability hosts.
+//
+// Logs and metrics live on separate hosts with separate query languages, but
+// everything around them is shared: the same credential, the same team, the
+// same reason a token without a team slug cannot read either.
 type gateway struct {
 	client   *api.Client
 	base     string
+	metrics  string
 	teamSlug string
 }
 
@@ -56,7 +61,12 @@ func openGateway(req Request) (gateway, error) {
 		return gateway{}, err
 	}
 
-	return gateway{client: client, base: cli.Config.LogURL.Value, teamSlug: teamSlug}, nil
+	return gateway{
+		client:   client,
+		base:     cli.Config.LogURL.Value,
+		metrics:  cli.Config.MetricsURL.Value,
+		teamSlug: teamSlug,
+	}, nil
 }
 
 // gatewayApp resolves which application a gateway query is about, by name.

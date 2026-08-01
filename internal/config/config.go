@@ -35,6 +35,12 @@ const DefaultAPIURL = "https://api.outplane.com/api"
 // else in the CLI talks to it.
 const DefaultLogURL = "https://loki.outplane.com"
 
+// DefaultMetricsURL is the gateway that serves resource usage.
+//
+// A third host, reached exactly like the log gateway: same bearer token, same
+// team header, its own query language. Only `metrics` talks to it.
+const DefaultMetricsURL = "https://metrics.outplane.com"
+
 // Source says where a resolved value came from. It exists so that every
 // setting can explain itself, which turns a class of confusing support
 // questions into a single command.
@@ -113,12 +119,13 @@ func (l Link) Path() string { return l.path }
 
 // Resolved is the complete answer to "what should this invocation do".
 type Resolved struct {
-	APIURL   Value
-	LogURL   Value
-	Token    Value
-	TeamID   Value
-	TeamSlug Value
-	AppID    Value
+	APIURL     Value
+	LogURL     Value
+	MetricsURL Value
+	Token      Value
+	TeamID     Value
+	TeamSlug   Value
+	AppID      Value
 
 	// TeamError explains why no team could be resolved, when none could. It is
 	// carried rather than returned so that commands which need no credential
@@ -186,6 +193,11 @@ func Resolve(ov Overrides) (Resolved, error) {
 	r.LogURL = pick(
 		Value{os.Getenv("OUTPLANE_LOG_URL"), SourceEnv},
 		Value{DefaultLogURL, SourceDefault},
+	)
+
+	r.MetricsURL = pick(
+		Value{os.Getenv("OUTPLANE_METRICS_URL"), SourceEnv},
+		Value{DefaultMetricsURL, SourceDefault},
 	)
 
 	// Team and credential are resolved together, because with team-scoped

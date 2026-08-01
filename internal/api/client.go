@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -148,7 +149,7 @@ func (c *Client) GetAbsolute(ctx context.Context, rawURL string) ([]byte, error)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, transportError(err)
+		return nil, transportError(err, hostOf(rawURL))
 	}
 	defer resp.Body.Close()
 
@@ -217,7 +218,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return transportError(err)
+		return transportError(err, "the Out Plane API")
 	}
 	defer resp.Body.Close()
 
@@ -374,19 +375,32 @@ func toError(status int, env envelope, reqID string) *clierr.Error {
 
 // transportError turns a network failure into something a user can act on.
 // "dial tcp: i/o timeout" tells a developer plenty and a user nothing.
-func transportError(err error) *clierr.Error {
+func transportError(err error, host string) *clierr.Error {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "context deadline exceeded"), strings.Contains(msg, "Client.Timeout"):
 		return clierr.New(clierr.KindTimeout, "the request timed out").
 			WithHint("The operation may still be running on the server.")
 	case strings.Contains(msg, "no such host"), strings.Contains(msg, "connection refused"):
-		return clierr.New(clierr.KindUpstream, "could not reach the Out Plane API").
-			WithHint("Check your network connection, or the apiUrl setting.").
+		return clierr.New(clierr.KindUpstream, "could not reach %s", host).
+			WithHint("Check your network connection, or the address configured for it.").
 			WithStep("see the resolved configuration", "outplane", "config", "list")
 	default:
 		return clierr.New(clierr.KindUpstream, "request failed: %v", err)
 	}
+}
+
+// hostOf names what could not be reached, so that an unreachable log or metrics
+// gateway is not reported as the API being down.
+//
+// Three hosts answer this CLI and only one of them is the API. Blaming the API
+// for the other two sends a reader to check a service that is working.
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return "the Out Plane API"
+	}
+	return u.Host
 }
 
 // requestID pulls the server's correlation id, trying the header names an

@@ -74,6 +74,25 @@ type Table struct {
 	// pretending to return rows.
 	Streamed bool
 
+	// Headers override the text table's column titles.
+	//
+	// A title is derived from the field name, which is right almost everywhere:
+	// the name is the contract and repeating it as the heading keeps --json and
+	// the table talking about the same thing. It stops being right when the
+	// name carries a unit the value already shows, where the heading reads
+	// "MEMORY BYTES" above "697 MiB".
+	//
+	// Text only. The field name never changes.
+	Headers map[string]string
+
+	// Units say how a column is written in the text table. A column with no
+	// entry is printed as it is, which is what every field of every command was
+	// before one of them started reporting bytes.
+	//
+	// Text only, deliberately. The machine formats carry the raw number, so a
+	// consumer never has to parse "697 MiB" back into something it can compare.
+	Units map[string]Unit
+
 	// Declared is every field this command documents, from its registry entry.
 	// Filled in by the caller rather than by the handler, so that no handler
 	// has to restate what the registry already says.
@@ -207,7 +226,7 @@ func (w *Writer) text(t Table) error {
 			}
 		}
 		for _, c := range t.Columns {
-			w.labelled(width, c, format(t.Rows[0][c]))
+			w.labelled(width, c, t.cell(c, t.Rows[0][c]))
 		}
 		w.footer(t)
 		return nil
@@ -215,11 +234,11 @@ func (w *Writer) text(t Table) error {
 
 	widths := make([]int, len(t.Columns))
 	for i, c := range t.Columns {
-		widths[i] = len(heading(c))
+		widths[i] = len(t.heading(c))
 	}
 	for _, row := range t.Rows {
 		for i, c := range t.Columns {
-			if n := len(format(row[c])); n > widths[i] {
+			if n := len(t.cell(c, row[c])); n > widths[i] {
 				widths[i] = n
 			}
 		}
@@ -227,14 +246,14 @@ func (w *Writer) text(t Table) error {
 
 	header := make([]string, len(t.Columns))
 	for i, c := range t.Columns {
-		header[i] = pad(heading(c), widths[i])
+		header[i] = pad(t.heading(c), widths[i])
 	}
 	fmt.Fprintln(w.Out, strings.TrimRight(strings.Join(header, "  "), " "))
 
 	for _, row := range t.Rows {
 		cells := make([]string, len(t.Columns))
 		for i, c := range t.Columns {
-			cells[i] = pad(oneLine(format(row[c])), widths[i])
+			cells[i] = pad(oneLine(t.cell(c, row[c])), widths[i])
 		}
 		fmt.Fprintln(w.Out, strings.TrimRight(strings.Join(cells, "  "), " "))
 	}
@@ -556,6 +575,28 @@ func compact(v any) string {
 		return fmt.Sprint(v)
 	}
 	return strings.TrimRight(buf.String(), "\n")
+}
+
+// heading is a column's title in the text table.
+func (t Table) heading(column string) string {
+	if h, ok := t.Headers[column]; ok {
+		return h
+	}
+	return heading(column)
+}
+
+// cell renders one value for the text table, in the column's unit when it has
+// one.
+//
+// A value the unit cannot render falls back to the plain form rather than being
+// dropped or guessed at: a null memory reading is "—", not "0 B".
+func (t Table) cell(column string, v any) string {
+	if u, ok := t.Units[column]; ok {
+		if text, rendered := u.render(v); rendered {
+			return text
+		}
+	}
+	return format(v)
 }
 
 func pad(s string, width int) string {
