@@ -372,6 +372,10 @@ func execute(
 		return finish(rt.Out.Error(err), err)
 	}
 
+	if err := rejectFieldsWithoutFields(decl, rt.Fields); err != nil {
+		return finish(rt.Out.Error(err), err)
+	}
+
 	handler, ok := commands.Lookup(decl.Path)
 	if !ok {
 		// Declared but not implemented. Say so plainly: a command that
@@ -422,6 +426,29 @@ func rejectSuppressedGlobals(decl registry.Command, cmd *cobra.Command) error {
 				"Run `outplane %s --help` to see what it takes.", name, path)
 	}
 	return nil
+}
+
+// rejectFieldsWithoutFields fails when --fields is given to a command that has
+// none.
+//
+// A command that streams text, `deploy logs` being the first, declares no
+// output fields because it has no record structure to narrow. Without this
+// check the flag was accepted and ignored: the writer sees the output was
+// already streamed and returns before any field handling runs.
+//
+// Checked here rather than in the writer because by then the log has been
+// printed, and a thousand lines followed by "that flag does not apply" is not
+// an error message, it is an apology.
+func rejectFieldsWithoutFields(decl registry.Command, fields []string) error {
+	if len(fields) == 0 || len(decl.OutputFields) > 0 {
+		return nil
+	}
+
+	path := strings.Join(decl.Path, " ")
+	return clierr.New(clierr.KindUsage, "--fields does not apply to `outplane %s`", path).
+		WithCode("usage.no_fields").
+		WithHint("This command writes text as it arrives and has no fields to select from.").
+		WithStep("run it without --fields", strings.Fields("outplane "+path)...)
 }
 
 func declaredFields(decl registry.Command) []string {
