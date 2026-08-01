@@ -89,6 +89,12 @@ type StreamKind int
 const (
 	StreamNone StreamKind = iota
 	StreamNDJSON
+
+	// StreamLines is output that is already text and has no record structure
+	// to encode: a build log is one long stream produced by somebody else's
+	// compiler. Wrapping each line in an object would add a field nobody asked
+	// for and break `outplane deploy logs | grep error`.
+	StreamLines
 )
 
 // OutputMode is the per-command declaration of what a piped invocation

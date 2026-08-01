@@ -139,10 +139,10 @@ func awaitDeployment(
 
 	req.CLI.Out.Note("Waiting for deployment %d…", current.ID)
 
-	var offset int64
+	reader := &core.BuildLogReader{DeploymentID: current.ID}
 	for {
 		if follow {
-			offset = streamLogs(ctx, req, client, current.ID, offset)
+			emitBuildLog(ctx, req, client, reader)
 		}
 
 		if core.Finished(current.Status) {
@@ -196,23 +196,22 @@ func finish(req Request, app core.App, d core.Deployment) (core.Deployment, erro
 		WithDetail("status", d.Status)
 }
 
-// streamLogs prints whatever build output is new and returns the next offset.
+// emitBuildLog prints whatever build output is new.
 //
-// Build logs are polled by byte offset rather than streamed, so the offset
-// returned by one call is what makes the next return only new bytes. Output
-// goes to stderr: it is progress, not the command's result, and stdout has to
-// stay parseable.
-func streamLogs(ctx context.Context, req Request, client *api.Client, id int, offset int64) int64 {
-	chunk, err := core.BuildLogs(ctx, client, id, offset)
-	if err != nil {
-		// Logs are not available for every deployment, and a build that has not
-		// started producing output is not an error worth failing over.
-		return offset
+// The offset lives in the reader, which is shared with `deploy logs`; keeping
+// it here as well is how the two commands would drift into repeating or
+// skipping output.
+//
+// Text goes to stderr: it is progress, not the command's result, and stdout has
+// to stay parseable. A read that fails is ignored rather than fatal, because a
+// build that has not started writing yet is not a failure and the wait loop's
+// own timeout is what ends this.
+func emitBuildLog(ctx context.Context, req Request, client *api.Client, reader *core.BuildLogReader) {
+	text, _, err := reader.Next(ctx, client)
+	if err != nil || text == "" {
+		return
 	}
-	if chunk.Text != "" {
-		fmt.Fprint(req.CLI.Out.Err, chunk.Text)
-	}
-	return chunk.Offset
+	fmt.Fprint(req.CLI.Out.Err, text)
 }
 
 // waitDeadline resolves --timeout into a point in time.

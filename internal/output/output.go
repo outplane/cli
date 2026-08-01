@@ -51,6 +51,16 @@ type Table struct {
 	// that `app get` emits an object and `app list` emits {items, total}.
 	Single bool
 
+	// Streamed says the handler has already written the output itself, and
+	// there is nothing left to render.
+	//
+	// Log commands need this. A table is built in memory and printed at the
+	// end, which is the one thing a stream must not do: a follow has no end,
+	// and even a finished build log is thousands of lines nobody wants
+	// buffered. Those handlers write as they read and set this, rather than
+	// pretending to return rows.
+	Streamed bool
+
 	// Declared is every field this command documents, from its registry entry.
 	// Filled in by the caller rather than by the handler, so that no handler
 	// has to restate what the registry already says.
@@ -77,6 +87,12 @@ func New(out, errw io.Writer, ctx execctx.Context) *Writer {
 
 // Result renders a successful outcome to stdout.
 func (w *Writer) Result(t Table, fields []string) error {
+	// Already written by the handler, as it read. Printing "No results." here
+	// after a thousand lines of log would be the writer contradicting them.
+	if t.Streamed {
+		return nil
+	}
+
 	if len(fields) > 0 {
 		narrowed, err := t.selectFields(fields)
 		if err != nil {

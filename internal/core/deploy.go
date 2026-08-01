@@ -117,6 +117,57 @@ func BuildLogs(ctx context.Context, c *api.Client, id int, offset int64) (LogChu
 	return LogChunk{Text: dto.Logs, Offset: dto.BytePosition, ProcessStatus: dto.ProcessStatus}, nil
 }
 
+// BuildLogReader walks a build log from wherever it last stopped.
+//
+// It exists so that the two commands which read build output, `deploy create
+// --follow` and `deploy logs`, share one piece of offset arithmetic instead of
+// each keeping its own copy. The offset is the whole state, and getting it
+// wrong in one place and not the other would mean one command silently
+// repeating or skipping output.
+//
+// It holds no client and does no printing: the caller decides how often to ask
+// and what to do with the text.
+type BuildLogReader struct {
+	DeploymentID int
+
+	offset int64
+}
+
+// Next returns whatever has been written since the last call, and whether the
+// build has stopped producing more.
+//
+// An empty string is the normal answer while a build is still starting up, and
+// is not an error. The offset never leaves this type: that is the entire point
+// of it existing, since a caller keeping its own copy is how two commands come
+// to repeat or skip output.
+func (r *BuildLogReader) Next(ctx context.Context, c *api.Client) (text string, finished bool, err error) {
+	chunk, err := BuildLogs(ctx, c, r.DeploymentID, r.offset)
+	if err != nil {
+		return "", false, err
+	}
+	r.offset = chunk.Offset
+	return chunk.Text, BuildFinished(chunk.ProcessStatus), nil
+}
+
+// BuildFinished reports whether a build has stopped, from the phase reported
+// beside its output.
+//
+// The phase is the build machine's own, not the deployment's: a build can have
+// finished while the deployment is still releasing. For reading build output
+// that is exactly the right question, and it is why this command needs no
+// application reference to know when to stop.
+//
+// Like deployment states, only the finished phases are listed. Anything else,
+// including a phase this release has not seen, counts as still running.
+func BuildFinished(phase string) bool {
+	switch phase {
+	case "Succeeded", "Failed":
+		return true
+	default:
+		return false
+	}
+}
+
 // finishedStates are the deployment statuses that will not change again.
 //
 // Deliberately a list of what IS final rather than what is not. Anything else,
