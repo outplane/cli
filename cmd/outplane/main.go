@@ -34,9 +34,11 @@ import (
 //
 //	go build -ldflags "-X main.version=1.2.3"
 //
-// A development build reports "dev", which later lets the update check stay
-// quiet: nobody should be told to upgrade a binary they just compiled.
-var version = "dev"
+// A build that was not stamped says so, and is then treated like any other
+// version the server cannot read: refused. Nothing anywhere branches on this
+// value. A local build that needs to reach the API stamps a version, exactly as
+// a release does.
+var version = "unstamped"
 
 func main() {
 	os.Exit(run())
