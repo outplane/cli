@@ -188,12 +188,26 @@ func finish(req Request, app core.App, d core.Deployment) (core.Deployment, erro
 		return d, nil
 	}
 
-	return d, clierr.New(clierr.KindUpstream, "deployment %d ended as %s", d.ID, d.Status).
+	e := clierr.New(clierr.KindUpstream, "deployment %d ended as %s", d.ID, d.Status).
 		WithCode("deploy.failed").
-		WithHint("The build or the release did not complete. Its output says why.").
-		WithStep("read the build output", "outplane", "deploy", "logs", fmt.Sprint(d.ID)).
 		WithDetail("app", app.Name).
 		WithDetail("status", d.Status)
+
+	// Where the answer is depends on what this app deploys. An app built from a
+	// repository has build output to read; one that deploys a ready-made image
+	// never had a build, and sending somebody to `deploy logs` for it lands
+	// them on "no build output", which reads as a second failure rather than as
+	// the wrong question.
+	if app.Source == "container-registry" {
+		return d, e.
+			WithHint("This app deploys a ready-made image, so nothing was built. The image "+
+				"could not be pulled, or it started and stopped.").
+			WithDetail("imageRef", d.ImageRef)
+	}
+
+	return d, e.
+		WithHint("The build or the release did not complete. The build output says which.").
+		WithStep("read the build output", "outplane", "deploy", "logs", fmt.Sprint(d.ID))
 }
 
 // emitBuildLog prints whatever build output is new.
