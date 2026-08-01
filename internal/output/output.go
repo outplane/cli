@@ -51,6 +51,18 @@ type Table struct {
 	// that `app get` emits an object and `app list` emits {items, total}.
 	Single bool
 
+	// Footer is printed after the rows, in text mode only.
+	//
+	// Some results need a closing sentence that belongs after the data rather
+	// than before it: "the one you wanted is missing? grant access here". A
+	// handler cannot write that itself, because the table is rendered after the
+	// handler returns, so anything it printed would land above the table it
+	// refers to.
+	//
+	// Text only. In a machine format the same fact belongs in the command's
+	// automation notes, where a consumer can find it without parsing prose.
+	Footer string
+
 	// Streamed says the handler has already written the output itself, and
 	// there is nothing left to render.
 	//
@@ -161,6 +173,9 @@ func (w *Writer) ndjson(t Table) error {
 func (w *Writer) text(t Table) error {
 	if len(t.Rows) == 0 {
 		fmt.Fprintln(w.Err, "No results.")
+		if t.Footer != "" {
+			fmt.Fprintf(w.Err, "\n%s\n", t.Footer)
+		}
 		return nil
 	}
 
@@ -207,6 +222,9 @@ func (w *Writer) text(t Table) error {
 
 	if t.Truncated {
 		fmt.Fprintf(w.Err, "\nShowing %d of %d. The result was truncated.\n", len(t.Rows), t.Total)
+	}
+	if t.Footer != "" {
+		fmt.Fprintf(w.Err, "\n%s\n", t.Footer)
 	}
 	return nil
 }
