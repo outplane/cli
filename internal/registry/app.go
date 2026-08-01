@@ -77,7 +77,17 @@ func appList() Command {
 				Description: "where the image comes from: github, container-registry, " +
 					"or unknown:N for a provider this release predates",
 			},
-			{Name: "updatedAt", Type: "string", Description: "RFC 3339, UTC"},
+			{
+				Name:        "lastDeployedAt",
+				Type:        "string",
+				Description: "when the last deployment started. RFC 3339, UTC",
+			},
+			{
+				Name: "updatedAt",
+				Type: "string",
+				Description: "when the app's own record last changed, which a deployment does " +
+					"not touch. RFC 3339, UTC",
+			},
 		},
 
 		ErrorCodes: []string{"context.no_team", "auth.token_invalid"},
@@ -126,7 +136,10 @@ func appList() Command {
 				"This is how a new platform state reaches an older CLI; treat it as unknown " +
 				"rather than as a failure.",
 			"This command reports no URL. A public address needs the app's port, which is a " +
-				"separate request per app, so listing does not fetch one.",
+				"separate request per app, so listing does not fetch one. `app get` has it.",
+			"lastDeployedAt and updatedAt are different questions. The first is when the app " +
+				"last deployed; the second is when its own record last changed, which a " +
+				"deployment does not touch. Sort on the first to find what is stale.",
 		},
 
 		Related: []string{"app get", "app instances", "deploy list", "status"},
@@ -228,9 +241,18 @@ func appGet() Command {
 			{Name: "directory", Type: "string | null", Description: "sub-directory built, when the repository holds more than one app"},
 			{Name: "startCommand", Type: "string | null", Description: "override for the image's own command"},
 			{Name: "commitMessage", Type: "string | null", Description: "of the deployed commit"},
-			{Name: "lastDeployedAt", Type: "string", Description: "RFC 3339, UTC"},
+			{
+				Name:        "lastDeployedAt",
+				Type:        "string",
+				Description: "when the last deployment started. RFC 3339, UTC",
+			},
 			{Name: "createdAt", Type: "string", Description: "RFC 3339, UTC"},
-			{Name: "updatedAt", Type: "string", Description: "RFC 3339, UTC"},
+			{
+				Name: "updatedAt",
+				Type: "string",
+				Description: "when the app's own record last changed, which a deployment does " +
+					"not touch. RFC 3339, UTC",
+			},
 		},
 
 		ErrorCodes: []string{"app.not_found", "app.ambiguous", "context.no_app", "context.no_team"},

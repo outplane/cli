@@ -31,15 +31,19 @@ func appList(ctx context.Context, req Request) (output.Table, error) {
 	}
 
 	// Column order is the order a person scans: what it is called, whether it
-	// is healthy, how many of it there are, how big each one is. The id and the
-	// timestamps are in the JSON but not in the table, because a GUID eats a
-	// third of the terminal width and nobody reads one.
+	// is healthy, how many of it there are, how big each one is, and when
+	// anything last happened to it. The id is in the JSON but not in the table,
+	// because a GUID eats a third of the terminal width and nobody reads one.
+	//
+	// The date is the last deployment rather than updatedAt, which is the app
+	// record's own modification time: editing a variable moves it and deploying
+	// does not, so as a "what is stale here" column it would mislead.
 	//
 	// deploymentStatus is likewise JSON-only. It repeats status for every app
 	// that is not paused, so as a column it would be noise on most rows and
 	// useful on almost none.
 	table := output.Table{
-		Columns: []string{"name", "status", "instances", "size"},
+		Columns: []string{"name", "status", "instances", "size", "lastDeployedAt"},
 		Total:   len(apps),
 	}
 	for _, a := range apps {
@@ -53,6 +57,7 @@ func appList(ctx context.Context, req Request) (output.Table, error) {
 			"instances":        a.Instances,
 			"size":             a.Size,
 			"source":           a.Source,
+			"lastDeployedAt":   a.LastDeployedAt,
 			"updatedAt":        a.UpdatedAt,
 		})
 	}

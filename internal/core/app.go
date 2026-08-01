@@ -46,7 +46,16 @@ type App struct {
 	// app is paused. Whether it is currently running is what Status says.
 	Instances int    `json:"instances"`
 	Size      string `json:"size"`
-	UpdatedAt string `json:"updatedAt"`
+
+	// LastDeployedAt is when the last deployment started, and is the field that
+	// answers "when did anything last happen here".
+	//
+	// UpdatedAt is not that field, which is why both exist: it is the app
+	// record's own modification time, so editing a variable moves it and
+	// deploying does not. The console draws its "Last deploy" column from the
+	// same value this reads.
+	LastDeployedAt string `json:"lastDeployedAt"`
+	UpdatedAt      string `json:"updatedAt"`
 
 	// Source is where the app's image comes from: "github" or
 	// "container-registry". It decides whether an explicit image reference
@@ -86,6 +95,13 @@ type appOverviewDTO struct {
 	// is read as the fallback. The console pairs these two the same way.
 	LastModifiedDate string `json:"lastModifiedDate"`
 	CreatedDate      string `json:"createdDate"`
+
+	// LastDeployment is the whole last deployment record, of which one field is
+	// wanted: when it started. It rides along in the list response, so the date
+	// costs nothing extra to report.
+	LastDeployment struct {
+		CreatedDate string `json:"createdDate"`
+	} `json:"lastDeployment"`
 }
 
 // ListApps returns every application in the current team.
@@ -118,6 +134,15 @@ func ListApps(ctx context.Context, c *api.Client, search string) ([]App, error) 
 			updated = d.CreatedDate
 		}
 
+		// An app always has a deployment, made when it was created, so the
+		// fallback is for a record the server could not attach one to rather
+		// than for a state a user can reach. The console falls back the same
+		// way.
+		deployed := d.LastDeployment.CreatedDate
+		if deployed == "" {
+			deployed = d.CreatedDate
+		}
+
 		apps = append(apps, App{
 			ID:               d.ID,
 			Name:             d.Name,
@@ -127,6 +152,7 @@ func ListApps(ctx context.Context, c *api.Client, search string) ([]App, error) 
 			Paused:           d.IsPaused,
 			Instances:        d.MinScale,
 			Size:             d.InstanceType,
+			LastDeployedAt:   serverInstant(deployed),
 			UpdatedAt:        serverInstant(updated),
 			Source:           sourceProviderNames.name(d.SourceProvider),
 		})
@@ -266,9 +292,8 @@ type AppDetail struct {
 	URL       string     `json:"url"`
 	Endpoints []Endpoint `json:"endpoints"`
 
-	CommitMessage  string `json:"commitMessage"`
-	LastDeployedAt string `json:"lastDeployedAt"`
-	CreatedAt      string `json:"createdAt"`
+	CommitMessage string `json:"commitMessage"`
+	CreatedAt     string `json:"createdAt"`
 }
 
 // Endpoint is one port an application serves.
@@ -355,19 +380,19 @@ func GetApp(ctx context.Context, c *api.Client, appID string) (AppDetail, error)
 			Paused:           d.IsPaused,
 			Instances:        d.MinScale,
 			Size:             d.InstanceType,
+			LastDeployedAt:   serverInstant(d.LastDeploymentDate),
 			UpdatedAt:        serverInstant(updated),
 			Source:           sourceProviderNames.name(d.SourceProvider),
 		},
-		Branch:         d.DefaultBranch,
-		SourceURL:      d.SourceURL,
-		PublicSource:   d.IsPublicSource,
-		BuildMethod:    buildMethodNames.name(d.BuildMethod),
-		Directory:      d.Directory,
-		StartCommand:   d.StartCommand,
-		CommitMessage:  d.CommitMessage,
-		LastDeployedAt: serverInstant(d.LastDeploymentDate),
-		CreatedAt:      serverInstant(d.CreatedDate),
-		Endpoints:      make([]Endpoint, 0, len(d.AppPorts)),
+		Branch:        d.DefaultBranch,
+		SourceURL:     d.SourceURL,
+		PublicSource:  d.IsPublicSource,
+		BuildMethod:   buildMethodNames.name(d.BuildMethod),
+		Directory:     d.Directory,
+		StartCommand:  d.StartCommand,
+		CommitMessage: d.CommitMessage,
+		CreatedAt:     serverInstant(d.CreatedDate),
+		Endpoints:     make([]Endpoint, 0, len(d.AppPorts)),
 	}
 
 	if detail.Source == SourceContainerRegistry {
