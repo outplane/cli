@@ -32,6 +32,14 @@ import (
 	"github.com/outplane/cli/internal/clierr"
 )
 
+// VersionHeader carries this release's version so the API can refuse releases
+// it no longer serves. RecommendedHeader comes back on every response and names
+// the version this release ought to be.
+const (
+	VersionHeader     = "X-Outplane-Cli-Version"
+	RecommendedHeader = "X-Outplane-Cli-Recommended"
+)
+
 // userAgent identifies the client to the server.
 //
 // Beyond politeness, this is what makes it possible to ever retire an old
@@ -139,6 +147,15 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", userAgent(c.version, c.osArch))
+	// The version travels in its own header as well as inside the User-Agent,
+	// because the server compares it. A User-Agent is free-form prose that
+	// proxies rewrite, so parsing a number out of one to decide whether to
+	// serve a request would be building a contract on top of a string nobody
+	// promised to leave alone.
+	//
+	// Sending it is also what puts this client in scope for the check at all:
+	// the API only gates requests that carry this header.
+	req.Header.Set(VersionHeader, c.version)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -219,6 +236,19 @@ func toError(status int, env envelope, reqID string) *clierr.Error {
 				WithRequestID(reqID)
 		}
 		return e.WithRequestID(reqID)
+
+	case status == http.StatusUpgradeRequired:
+		// This release is older than the API serves. Nothing about the request
+		// or the credential is wrong, so the message is the server's own: it
+		// names both the version sent and the version required, and repeating
+		// that here would risk the two disagreeing.
+		return clierr.New(clierr.KindUpgradeRequired,
+			"%s", fallback(apiMessage, "this version of the CLI is no longer supported")).
+			WithCode("client.upgrade_required").
+			WithHint("The API stopped serving this release. Updating is the only fix; "+
+				"retrying will not help.").
+			WithStep("install the newest version", "outplane", "update").
+			WithRequestID(reqID)
 
 	case status == http.StatusUnauthorized:
 		// The JWT middleware rejected the token before any controller saw it:

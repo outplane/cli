@@ -39,6 +39,15 @@ const (
 	KindTimeout      Kind = "timeout"               // exit 124
 	KindInterrupted  Kind = "interrupted"           // exit 130
 	KindInternal     Kind = "internal"              // exit 1
+
+	// KindUpgradeRequired is the API refusing to serve this release at all.
+	//
+	// Its own code, rather than folding into usage or upstream, because it is
+	// the one failure with a single known remedy that a pipeline can act on
+	// without a human: run `outplane update`. Nothing about the request or the
+	// credential is wrong, so pointing at either would send the reader looking
+	// in the wrong place.
+	KindUpgradeRequired Kind = "upgrade_required" // exit 9
 )
 
 // ExitCode returns the process exit status for a kind.
@@ -61,6 +70,8 @@ func (k Kind) ExitCode() int {
 		return 7
 	case KindUpstream:
 		return 8
+	case KindUpgradeRequired:
+		return 9
 	case KindTimeout:
 		return 124
 	case KindInterrupted:
