@@ -158,7 +158,7 @@ func (w *Writer) text(t Table) error {
 			}
 		}
 		for _, c := range t.Columns {
-			fmt.Fprintf(w.Out, "%-*s  %s\n", width, c, format(t.Rows[0][c]))
+			w.labelled(width, c, format(t.Rows[0][c]))
 		}
 		return nil
 	}
@@ -184,7 +184,7 @@ func (w *Writer) text(t Table) error {
 	for _, row := range t.Rows {
 		cells := make([]string, len(t.Columns))
 		for i, c := range t.Columns {
-			cells[i] = pad(format(row[c]), widths[i])
+			cells[i] = pad(oneLine(format(row[c])), widths[i])
 		}
 		fmt.Fprintln(w.Out, strings.TrimRight(strings.Join(cells, "  "), " "))
 	}
@@ -334,6 +334,39 @@ func unknownFieldError(field string, available map[string]bool) error {
 		WithCode("usage.unknown_field").
 		WithHint("Available fields: %s.", strings.Join(names, ", ")).
 		WithDetail("availableFields", names)
+}
+
+// labelled prints one label/value pair, keeping a multi-line value aligned
+// under the first line rather than letting it collapse the layout.
+//
+// Values really are multi-line: a commit message is the obvious one, and it
+// arrives with blank lines and trailers intact. Printed naively, the second
+// line starts at column zero and the reader can no longer tell where one field
+// ends and the next begins.
+func (w *Writer) labelled(width int, label, value string) {
+	lines := strings.Split(value, "\n")
+	fmt.Fprintf(w.Out, "%-*s  %s\n", width, label, lines[0])
+
+	indent := strings.Repeat(" ", width+2)
+	for _, line := range lines[1:] {
+		if line == "" {
+			fmt.Fprintln(w.Out)
+			continue
+		}
+		fmt.Fprintf(w.Out, "%s%s\n", indent, line)
+	}
+}
+
+// oneLine flattens a value for a table cell.
+//
+// A row is one line by definition, so a newline inside a cell does not make the
+// table taller, it destroys every column after it. Collapsing is the only
+// option; the full value is still in --json.
+func oneLine(s string) string {
+	if !strings.ContainsAny(s, "\n\r\t") {
+		return s
+	}
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // heading turns a field name into a column header.

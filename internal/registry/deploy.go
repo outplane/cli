@@ -110,9 +110,11 @@ func deployCreate() Command {
 			{Name: "commitMessage", Type: "string | null"},
 			{Name: "startedAt", Type: "string", Description: "RFC 3339, UTC"},
 			{
-				Name:        "duration",
-				Type:        "string | null",
-				Description: "how long it took, once finished. Already humanised by the server",
+				Name: "duration",
+				Type: "string | null",
+				Description: "the server's own figure for the build, already humanised. It " +
+					"excludes the release that follows, so a --wait call takes slightly longer " +
+					"than this reports",
 			},
 			{Name: "changed", Type: "bool", Description: "true whenever a build was started"},
 		},
