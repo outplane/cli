@@ -45,6 +45,18 @@ func (f Flags) String(name string) string {
 	return ""
 }
 
+// Strings returns a repeatable flag's values, in the order they were given.
+//
+// Order is part of the contract for anything a caller can pass twice: the last
+// --env for a key is the one that means something, and a reader who wrote them
+// in that order expects that.
+func (f Flags) Strings(name string) []string {
+	if v, ok := f[name].([]string); ok {
+		return v
+	}
+	return nil
+}
+
 func (f Flags) Bool(name string) bool {
 	if v, ok := f[name].(bool); ok {
 		return v

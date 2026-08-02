@@ -244,6 +244,11 @@ func attach(root *cobra.Command, decl registry.Command, exec *execctx.Context, g
 		switch fl.Type {
 		case "bool":
 			leaf.Flags().BoolP(fl.Name, fl.Short, fl.Default == "true", fl.Description)
+		case "strings":
+			// Repeatable. StringArray rather than StringSlice, because a slice
+			// splits on commas and a value here can legitimately contain one:
+			// --env ARGS=a,b is one variable, not two.
+			leaf.Flags().StringArrayP(fl.Name, fl.Short, nil, fl.Description)
 		default:
 			leaf.Flags().StringP(fl.Name, fl.Short, fl.Default, fl.Description)
 		}
@@ -577,6 +582,9 @@ func flagValues(cmd *cobra.Command, decl registry.Command) commands.Flags {
 		switch fl.Type {
 		case "bool":
 			v, _ := cmd.Flags().GetBool(fl.Name)
+			values[fl.Name] = v
+		case "strings":
+			v, _ := cmd.Flags().GetStringArray(fl.Name)
 			values[fl.Name] = v
 		default:
 			v, _ := cmd.Flags().GetString(fl.Name)

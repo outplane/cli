@@ -18,6 +18,7 @@ func init() {
 	Register(
 		appList(),
 		appGet(),
+		appCreate(),
 		appDelete(),
 	)
 }
@@ -322,6 +323,200 @@ func appGet() Command {
 
 		Related: []string{"app list", "deploy create", "logs", "link"},
 
+		DocsURL: "https://docs.outplane.com/cli/app",
+	}
+}
+
+// appCreate is the command with the most ways to be wrong, which is why it
+// checks every one of them before sending anything.
+//
+// Two platform facts shape it. Creating an application also deploys it: the
+// server starts the first deployment itself, so there is no dormant state and
+// no separate deploy step. And a name is permanent, because it becomes part of
+// every address the application answers on; the display name is the editable
+// one.
+func appCreate() Command {
+	return Command{
+		Path:  []string{"app", "create"},
+		Short: "create an application and deploy it",
+		Long: "Creates an application from a repository or from a container image.\n\n" +
+			"Creating also deploys: the platform starts the first deployment as part of " +
+			"creation, so the command returns a deployment id and something is already " +
+			"building when it does.\n\n" +
+			"The name cannot be changed afterwards. It appears in every address the " +
+			"application answers on, which is why it takes only letters and numbers.",
+
+		Risk:         RiskWrite,
+		RequiresAuth: true,
+
+		// A repository the caller can reach is resolved through their GitHub
+		// installation, which belongs to a person rather than to a team. An
+		// image needs no such thing, but the command is declared once.
+		Session: SessionUser,
+
+		// Not idempotent: running it twice creates one application and then
+		// fails, because the name is taken.
+		Idempotent:     false,
+		SupportsDryRun: true,
+
+		APICalls: []string{"POST /api/App/CreateApp"},
+
+		Args: []Arg{
+			{
+				Name:     "name",
+				Short:    "letters and numbers, 5 to 45 characters. Permanent",
+				Required: true,
+				Pattern:  "^[a-zA-Z0-9]{5,45}$",
+			},
+		},
+
+		Flags: []Flag{
+			{
+				Name:        "repo",
+				Type:        "string",
+				Description: "repository as owner/name. Requires --branch. Not valid with --image",
+			},
+			{
+				Name:        "branch",
+				Type:        "string",
+				Description: "branch to deploy, usually main. Required with --repo",
+			},
+			{
+				Name: "public-repo",
+				Type: "bool", Default: "false",
+				Description: "the repository is public, so no installation is needed to read it",
+			},
+			{
+				Name:        "image",
+				Type:        "string",
+				Description: "container image to run, such as nginx:latest. Not valid with --repo",
+			},
+			{
+				Name: "build", Type: "string", Default: "dockerfile",
+				Enum:        []string{"dockerfile", "buildpack"},
+				Description: "how the repository becomes an image. Ignored for --image",
+			},
+			{
+				Name:        "dir",
+				Type:        "string",
+				Description: "sub-directory to build, when the repository holds more than one app",
+			},
+			{
+				Name:        "start-command",
+				Type:        "string",
+				Description: "overrides the image's own command",
+			},
+			{
+				Name: "port", Type: "strings",
+				Description: "PORT[:SCHEME[:public|private]], repeatable. " +
+					"Defaults to http and private, e.g. 3000 or 3000:http:public",
+			},
+			{
+				Name: "env", Type: "strings",
+				Description: "KEY=VALUE, repeatable. Values are never printed back",
+			},
+			{
+				Name: "size", Type: "string", Default: "op-20",
+				Enum:        []string{"op-20", "op-22", "op-34", "op-46", "op-58", "op-70", "op-82", "op-94"},
+				Description: "instance type. Larger ones may need a paid plan",
+			},
+			{
+				Name: "instances", Type: "int", Default: "1",
+				Description: "replica count, 1 to 5",
+			},
+		},
+
+		OutputFields: []Field{
+			{Name: "name", Type: "string"},
+			{Name: "appId", Type: "string | null", Description: "null for a dry run"},
+			{
+				Name:        "deploymentId",
+				Type:        "int | null",
+				Description: "the deployment creation started. Queued, not finished",
+			},
+			{Name: "source", Type: "string", Enum: []string{"github", "container-registry"}},
+			{Name: "repository", Type: "string | null"},
+			{Name: "branch", Type: "string | null"},
+			{Name: "imageRef", Type: "string | null"},
+			{
+				Name:        "buildMethod",
+				Type:        "string",
+				Description: "dockerfile, buildpack, or prebuilt-image for an image app whatever --build said",
+			},
+			{Name: "size", Type: "string"},
+			{Name: "instances", Type: "int"},
+			{Name: "ports", Type: "array", Description: "{port, scheme, public}"},
+			{Name: "envCount", Type: "int", Description: "how many variables were set. Values are never returned"},
+			{Name: "changed", Type: "bool", Description: "false for a dry run"},
+		},
+
+		ErrorCodes: []string{
+			"app.name_invalid",
+			"app.name_reserved",
+			"app.source_required",
+			"app.source_conflict",
+			"app.repository_invalid",
+			"app.branch_required",
+			"app.size_invalid",
+			"app.instances_invalid",
+			"app.port_invalid",
+			"app.port_duplicate",
+			"usage.bad_port",
+			"usage.bad_assignment",
+			"quota.limit_reached",
+		},
+		ExitCodes: []int{0, 2, 3, 7, 8},
+
+		Examples: []Example{
+			{
+				Title:        "from a repository",
+				Command:      "outplane app create checkout --repo acme/checkout --branch main --port 3000:http:public",
+				Argv:         []string{"outplane", "app", "create", "checkout", "--repo", "acme/checkout", "--branch", "main", "--port", "3000:http:public"},
+				Placeholders: map[string]string{"checkout": "<APP_NAME>", "acme/checkout": "<OWNER>/<REPO>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:        "from a container image",
+				Command:      "outplane app create proxy01 --image nginx:latest --port 80:http:public",
+				Argv:         []string{"outplane", "app", "create", "proxy01", "--image", "nginx:latest", "--port", "80:http:public"},
+				Placeholders: map[string]string{"proxy01": "<APP_NAME>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:        "with variables and a larger instance",
+				Command:      "outplane app create worker01 --image redis:7 --port 6379:tcp --env MODE=queue --size op-34",
+				Argv:         []string{"outplane", "app", "create", "worker01", "--image", "redis:7", "--port", "6379:tcp", "--env", "MODE=queue", "--size", "op-34"},
+				Placeholders: map[string]string{"worker01": "<APP_NAME>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:        "check the request without sending it",
+				Command:      "outplane app create checkout --repo acme/checkout --branch main --dry-run",
+				Argv:         []string{"outplane", "app", "create", "checkout", "--repo", "acme/checkout", "--branch", "main", "--dry-run"},
+				Placeholders: map[string]string{"checkout": "<APP_NAME>", "acme/checkout": "<OWNER>/<REPO>"},
+				Risk:         RiskRead,
+			},
+		},
+
+		AutomationNotes: []string{
+			"Creating deploys. deploymentId is a queued deployment, not a finished one; follow " +
+				"it with `outplane deploy logs <id>` or check `outplane deploy get <id> <name>`.",
+			"The name is permanent and appears in the public address. Letters and numbers only, " +
+				"five characters or more, and a set of infrastructure-sounding names is refused.",
+			"--repo needs --branch; --image forbids one. Passing both sources is an error rather " +
+				"than a preference.",
+			"A private repository is read through the GitHub installation of the user whose " +
+				"token this is. --public-repo skips that, and is the only way to create from a " +
+				"repository the platform has no installation for.",
+			"A port is private unless it says public. A private port is reachable by other " +
+				"applications and by a custom domain, and has no platform address.",
+			"Everything the server would refuse is checked first, so an error names the field. " +
+				"The exceptions are the plan limit and the name already being taken, which only " +
+				"the server knows.",
+			"Variable values are never echoed back. envCount reports how many were set.",
+		},
+
+		Related: []string{"app list", "app get", "deploy create", "env set", "app delete"},
 		DocsURL: "https://docs.outplane.com/cli/app",
 	}
 }

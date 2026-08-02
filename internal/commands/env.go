@@ -309,14 +309,12 @@ func envChangeTable(app core.App, keys []string, action string, changed bool, de
 // A value containing an equals sign is kept whole, because a connection string
 // or a base64 key routinely has one and splitting on the last sign instead of
 // the first would mangle exactly the values people care most about.
+//
+// An empty list is an empty set, not an error. Whether one is required is the
+// caller's rule: `env set` needs at least one and says so through its argument
+// declaration, while `app create --env` is optional. Enforcing it here made the
+// optional case fail with a message about setting variables.
 func parseAssignments(args []string) (map[string]string, error) {
-	if len(args) == 0 {
-		return nil, clierr.New(clierr.KindUsage, "nothing to set").
-			WithCode("usage.missing_argument").
-			WithHint("Pass one or more KEY=VALUE pairs.").
-			WithStep("set a variable", "outplane", "env", "set", "KEY=value")
-	}
-
 	values := make(map[string]string, len(args))
 	for _, arg := range args {
 		key, value, ok := strings.Cut(arg, "=")
