@@ -148,12 +148,42 @@ type Error struct {
 	// Details carries structured context, such as the raw API message on a
 	// 500 or the fields that failed validation. Never rendered in text mode.
 	Details map[string]any `json:"details,omitempty"`
+
+	// status overrides the exit code the kind would give. See Exit.
+	status int
+
+	// silent suppresses rendering entirely. See Exit.
+	silent bool
 }
 
 func (e *Error) Error() string { return e.Message }
 
-// ExitCode is what the process should exit with.
-func (e *Error) ExitCode() int { return e.Kind.ExitCode() }
+// ExitCode is what the process should exit with. The kind decides, unless the
+// error carries a status of its own.
+func (e *Error) ExitCode() int {
+	if e.status != 0 {
+		return e.status
+	}
+	return e.Kind.ExitCode()
+}
+
+// Silent reports an error with nothing to say. See Exit.
+func (e *Error) Silent() bool { return e.silent }
+
+// Exit is a non-zero exit status and nothing else.
+//
+// One command needs it. `env run` hands the terminal to somebody else's
+// program, and when that program exits 1 the CLI has to exit 1: a caller
+// testing the status is asking about the command they ran, not about the tool
+// that started it. There is nothing to print either, because the program has
+// already said whatever it had to say, and an "Error:" line on top of it would
+// be the CLI taking the blame for a failure that is not its own.
+//
+// It travels as an error because that is the only channel a handler has for
+// ending a command, not because anything went wrong here.
+func Exit(status int) *Error {
+	return &Error{Kind: KindInternal, status: status, silent: true}
+}
 
 // New builds an error of the given kind.
 func New(kind Kind, format string, args ...any) *Error {

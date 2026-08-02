@@ -336,6 +336,14 @@ func (w *Writer) Error(err error) int {
 		return 0
 	}
 
+	// A status with nothing to report: the command ran somebody else's program
+	// and is passing on its exit code. Rendering anything here would put an
+	// "Error:" line under output the CLI did not produce, or an envelope on
+	// stdout beside it.
+	if e.Silent() {
+		return e.ExitCode()
+	}
+
 	if w.Ctx.Machine() && !w.RawStream {
 		enc := json.NewEncoder(w.Out)
 		enc.SetIndent("", "  ")
