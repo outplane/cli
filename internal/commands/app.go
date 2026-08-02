@@ -96,6 +96,7 @@ func appDetailTable(d core.AppDetail) output.Table {
 	endpoints := make([]map[string]any, 0, len(d.Endpoints))
 	for _, e := range d.Endpoints {
 		endpoints = append(endpoints, map[string]any{
+			"portId":        e.PortID,
 			"port":          e.Port,
 			"scheme":        e.Scheme,
 			"public":        e.Public,

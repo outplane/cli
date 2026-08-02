@@ -308,6 +308,11 @@ type AppDetail struct {
 
 // Endpoint is one port an application serves.
 type Endpoint struct {
+	// PortID identifies the port to the API, which is what attaching a custom
+	// domain needs: a domain is bound to a port record rather than to a port
+	// number on an application.
+	PortID string `json:"portId"`
+
 	Port   int    `json:"port"`
 	Scheme string `json:"scheme"`
 	Public bool   `json:"public"`
@@ -354,6 +359,7 @@ type appDetailDTO struct {
 		Scheme        int    `json:"scheme"`
 		IsPublic      bool   `json:"isPublic"`
 		PublicURL     string `json:"publicUrl"`
+		ID            string `json:"id"`
 		CustomDomains []struct {
 			Domain string `json:"domain"`
 			Path   string `json:"path"`
@@ -417,6 +423,7 @@ func GetApp(ctx context.Context, c *api.Client, appID string) (AppDetail, error)
 			domains = append(domains, domainURL(cd.Domain, cd.Path, cd.SSL))
 		}
 		e := Endpoint{
+			PortID:        p.ID,
 			Port:          p.Port,
 			Scheme:        schemeNames.name(p.Scheme),
 			Public:        p.IsPublic,
@@ -448,6 +455,9 @@ func GetApp(ctx context.Context, c *api.Client, appID string) (AppDetail, error)
 //
 // The path is stored as "/" when there is none, and a URL ending in a bare
 // slash is noise, so that one case is trimmed and any real path is kept.
+//
+// Shared with the domain commands, which report the same address for the same
+// record and must not disagree about how it is spelled.
 func domainURL(domain, path string, ssl bool) string {
 	scheme := "http"
 	if ssl {

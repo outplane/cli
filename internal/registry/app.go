@@ -224,9 +224,9 @@ func appGet() Command {
 			{
 				Name: "endpoints",
 				Type: "array",
-				Description: "every port: {port, scheme, public, url, customDomains}. scheme is " +
-					"http, h2c or tcp; url is null on a private port; customDomains are full " +
-					"addresses, not host names",
+				Description: "every port: {portId, port, scheme, public, url, customDomains}. " +
+					"scheme is http, h2c or tcp; url is null on a private port; customDomains " +
+					"are full addresses, not host names; portId is what a custom domain binds to",
 			},
 			{Name: "repository", Type: "string | null", Description: "owner/repository, for a Git-sourced app"},
 			{Name: "branch", Type: "string | null", Description: "the branch that is deployed"},
