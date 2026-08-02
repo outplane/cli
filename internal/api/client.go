@@ -25,11 +25,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/outplane/cli/internal/clierr"
 )
 
@@ -168,26 +170,111 @@ func (c *Client) GetAbsolute(ctx context.Context, rawURL string) ([]byte, error)
 	return raw, nil
 }
 
+// Dial opens a WebSocket to the API.
+//
+// A socket gets everything a request gets: the same credential, the same team
+// header, the same version header. The one thing it must not inherit is the
+// client's timeout, which bounds a whole exchange and would cut a live session
+// off after thirty seconds. Bounding the handshake alone is the transport's
+// job, so this uses a client of its own.
+//
+// The credential travels in Authorization, as it does everywhere else in this
+// package. The console cannot do that, because a browser may not set headers on
+// a handshake, and sends a "bearer.<jwt>" subprotocol instead which the API also
+// accepts. There is no reason for a CLI to put a token somewhere a proxy will
+// log it as a protocol name.
+func (c *Client) Dial(ctx context.Context, path string, query url.Values, subprotocol string) (*websocket.Conn, error) {
+	u, err := url.Parse(c.baseURL + path)
+	if err != nil {
+		return nil, clierr.New(clierr.KindInternal, "could not build the socket address: %v", err)
+	}
+	// The library accepts http and https and reads them as ws and wss. Doing it
+	// here anyway keeps the scheme honest in anything that quotes the address.
+	switch u.Scheme {
+	case "https":
+		u.Scheme = "wss"
+	case "http":
+		u.Scheme = "ws"
+	}
+	u.RawQuery = query.Encode()
+
+	header := http.Header{}
+	c.headers(header, false)
+
+	conn, resp, err := websocket.Dial(ctx, u.String(), &websocket.DialOptions{
+		HTTPClient:   socketClient(),
+		HTTPHeader:   header,
+		Subprotocols: []string{subprotocol},
+	})
+	if err != nil {
+		// A handshake that reached the server fails with a status, and the
+		// status is the whole diagnosis: 403 for another team's application,
+		// 404 for an instance that has restarted since it was listed. One that
+		// never got a response is a network failure and reads as one.
+		if resp == nil {
+			return nil, transportError(err, "the Out Plane API")
+		}
+		return nil, toError(resp.StatusCode, socketEnvelope(resp), requestID(resp))
+	}
+	return conn, nil
+}
+
+// socketClient is an HTTP client with no overall deadline.
+//
+// Every timeout here bounds the handshake: connecting, TLS, and waiting for the
+// response headers. After the upgrade there is no deadline at all, because a
+// session ends when the caller's context does or when the far end closes, and
+// an idle terminal is not a stalled one.
+func socketClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+	}
+}
+
+// socketEnvelope reads the error body of a refused handshake.
+//
+// Only the first kilobyte is readable, which the library documents and which is
+// more than an envelope needs. A body that is not one leaves it empty, and the
+// status code speaks for itself.
+func socketEnvelope(resp *http.Response) envelope {
+	var env envelope
+	if raw, err := io.ReadAll(resp.Body); err == nil {
+		_ = json.Unmarshal(raw, &env)
+	}
+	return env
+}
+
 // setHeaders applies the credential, the team and the version to a request.
 //
-// Shared by both request paths so that a header added for one cannot be
-// forgotten on the other; the version header in particular decides whether the
-// server gates the request at all.
+// Shared by every path out of this package so that a header added for one
+// cannot be forgotten on the others; the version header in particular decides
+// whether the server gates the request at all.
 func (c *Client) setHeaders(req *http.Request, hasBody bool) {
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", userAgent(c.version, c.osArch))
-	req.Header.Set(VersionHeader, c.version)
+	c.headers(req.Header, hasBody)
+}
+
+// headers is setHeaders for anything that carries an http.Header without being
+// an *http.Request. A WebSocket handshake is one.
+func (c *Client) headers(h http.Header, hasBody bool) {
+	h.Set("Accept", "application/json")
+	h.Set("User-Agent", userAgent(c.version, c.osArch))
+	h.Set(VersionHeader, c.version)
 	if hasBody {
-		req.Header.Set("Content-Type", "application/json")
+		h.Set("Content-Type", "application/json")
 	}
 	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+		h.Set("Authorization", "Bearer "+c.token)
 	}
 	// Sent on every request, not only where it is needed: the header is checked
 	// before authentication, so omitting it produces a 400 that looks nothing
 	// like the real problem.
 	if c.teamID != "" {
-		req.Header.Set("X-Team-Id", c.teamID)
+		h.Set("X-Team-Id", c.teamID)
 	}
 }
 

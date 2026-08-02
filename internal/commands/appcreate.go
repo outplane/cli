@@ -102,7 +102,8 @@ func buildNewApp(req Request) (core.NewApp, error) {
 				"--image", "nginx:latest", "--port", "80")
 	}
 	if strings.TrimSpace(req.Args[0]) == "" {
-		return core.NewApp{}, emptyAppArgument()
+		return core.NewApp{}, emptyAppArgument(
+			"A new application has to be named; there is nothing to fall back to.")
 	}
 
 	spec := core.NewApp{

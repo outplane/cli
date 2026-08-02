@@ -85,7 +85,7 @@ func gatewayApp(ctx context.Context, req Request) (string, error) {
 		// whole team, which is a different answer to the one that was asked
 		// for and looks exactly like a correct one.
 		if strings.TrimSpace(req.Args[0]) == "" {
-			return "", emptyAppArgument()
+			return "", emptyAppArgument("Omit the argument entirely to ask about every application.")
 		}
 		ref = req.Args[0]
 	case req.CLI.Config.AppID.Value != "":
@@ -104,11 +104,15 @@ func gatewayApp(ctx context.Context, req Request) (string, error) {
 // emptyAppArgument is what an unset shell variable looks like when it reaches
 // the CLI. It is reported rather than ignored, in every command that takes an
 // application, because ignoring it silently widens the question.
-func emptyAppArgument() error {
+//
+// What omitting the argument would have meant differs by command: every
+// application for the gateway commands, the linked one for the rest, and
+// nothing at all where a name is required. The caller says which, because one
+// sentence covering all three was wrong for two of them however it was written.
+func emptyAppArgument(omission string) error {
 	return clierr.New(clierr.KindUsage, "the application argument is empty").
 		WithCode("usage.empty_argument").
-		WithHint("This is what an unset variable looks like. Omit the argument entirely "+
-			"to ask about every application.").
+		WithHint("This is what an unset variable looks like. %s", omission).
 		WithStep("see what this team has", "outplane", "app", "list")
 }
 

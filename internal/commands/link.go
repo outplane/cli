@@ -194,7 +194,8 @@ func targetAppRef(ctx context.Context, req Request, ref *string, command ...stri
 		// See emptyAppArgument: an empty argument is an unset variable, not a
 		// request for the default.
 		if strings.TrimSpace(*ref) == "" {
-			return core.App{}, emptyAppArgument()
+			return core.App{}, emptyAppArgument(
+				"Omit the argument entirely to use the application linked to this directory.")
 		}
 		return resolveApp(ctx, req, *ref)
 	}

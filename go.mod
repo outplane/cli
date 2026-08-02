@@ -6,19 +6,26 @@ go 1.25.0
 
 // Dependencies are declared here as the code that needs them lands.
 //
-// Nothing external is used yet: the command tree, the schema and the help
-// renderer are all standard library. That is not an accident. Every dependency
-// is a chance to reintroduce cgo, and the first milestone is more useful if it
-// builds from a clean checkout with no network at all.
+// Each one earns its place by being smaller than what it replaces. Every
+// dependency is also a chance to reintroduce cgo, so the rule below is not
+// negotiable.
 //
-// Planned direct dependencies, and why each one:
+// Direct dependencies, and why each one:
 //
 //   github.com/spf13/cobra          command tree, shell completions
-//   github.com/coder/websocket      app shell exec bridge and log streaming
+//   github.com/coder/websocket      the app shell bridge. Zero dependencies of
+//                                   its own, and a context-aware API, which is
+//                                   what makes an interrupted session end
+//                                   cleanly. The alternative was hand-writing
+//                                   RFC 6455: framing, masking and ping/pong
+//                                   are ours to get wrong exactly once
+//   golang.org/x/term               raw mode and terminal size for `app shell`
+//   github.com/pkg/browser          opens the console for browser login
+//
+// Planned, as the code that needs them lands:
+//
 //   github.com/itchyny/gojq         embedded --jq, so users need no jq binary
 //   github.com/zalando/go-keyring   OS keychain. Pure Go: keeps CGO_ENABLED=0
-//   golang.org/x/term               raw mode and terminal size for `shell`
-//   github.com/pkg/browser          opens the console for browser login
 //   github.com/knadh/koanf/v2       config file + env var layering
 //
 // HARD RULE: this module must build with CGO_ENABLED=0 on every target. A
@@ -28,6 +35,7 @@ go 1.25.0
 // CgoFiles. Never swap go-keyring for 99designs/keyring or keybase/go-keychain.
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.45.0
