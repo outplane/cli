@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"sort"
@@ -190,8 +191,9 @@ func newRoot(exec *execctx.Context) *cobra.Command {
 		attach(root, decl, exec, &g)
 	}
 
-	root.AddCommand(newSchemaCommand())
+	root.AddCommand(newSchemaCommand(exec))
 	root.AddCommand(newVersionCommand())
+	root.AddCommand(newHelpCommand(exec))
 
 	root.SetHelpFunc(func(cmd *cobra.Command, _ []string) {
 		if decl, ok := declFor(cmd); ok {
@@ -546,6 +548,18 @@ func declaredFields(decl registry.Command) []string {
 // in the correct format.
 func finish(_ int, err error) error { return err }
 
+// report renders an error raised by a command that does not go through
+// execute, and returns it so that run still takes the exit code from it.
+//
+// schema, help and version are built on the root rather than from the registry,
+// because they run before configuration and before authentication. That put
+// them outside the one place that renders a failure, and the result was an exit
+// code with no message at all: the exact thing this file warns about two
+// hundred lines further down.
+func report(cmd *cobra.Command, exec *execctx.Context, err error) error {
+	return finish(output.New(cmd.OutOrStdout(), cmd.ErrOrStderr(), *exec).Error(err), err)
+}
+
 func renderAndReturn(_ any, err error, exec execctx.Context, cmd *cobra.Command) error {
 	fmt.Fprintln(cmd.ErrOrStderr(), "Error:", err)
 	return err
@@ -631,7 +645,7 @@ func flagsGiven(cmd *cobra.Command, decl registry.Command) map[string]bool {
 // network access, because it is the entry point an agent uses to discover
 // everything else. Requiring a token here would leave an agent unable to find
 // out how to obtain one.
-func newSchemaCommand() *cobra.Command {
+func newSchemaCommand(exec *execctx.Context) *cobra.Command {
 	return &cobra.Command{
 		Use:                "schema [command path]",
 		Short:              "print the machine-readable command surface",
@@ -642,7 +656,11 @@ func newSchemaCommand() *cobra.Command {
 			if len(args) > 0 {
 				doc = doc.Filter(args)
 				if len(doc.Commands) == 0 {
-					return clierr.New(clierr.KindUsage, "no such command: %s", strings.Join(args, " "))
+					return report(cmd, exec, clierr.New(clierr.KindUsage,
+						"no such command: %s", strings.Join(args, " ")).
+						WithCode("usage.unknown_command").
+						WithHint("The whole surface is one document: run `outplane schema` with no argument.").
+						WithStep("list every command", "outplane", "schema"))
 				}
 			}
 			enc := json.NewEncoder(cmd.OutOrStdout())
@@ -651,6 +669,72 @@ func newSchemaCommand() *cobra.Command {
 			return enc.Encode(doc)
 		},
 	}
+}
+
+// newHelpCommand replaces cobra's own, which answers an unknown topic with a
+// usage dump and exit 0.
+//
+// It exists for one topic. Every command's help ends by pointing at
+// `outplane help exit-codes`, and until this was here that pointer went
+// nowhere: seventy-one help pages naming a command that did not exist, and the
+// failure to find it reported as success.
+//
+// Like `schema`, it runs before configuration and before authentication,
+// because a reader working out what an exit code meant has, by definition, just
+// had something fail.
+func newHelpCommand(exec *execctx.Context) *cobra.Command {
+	return &cobra.Command{
+		Use:                "help [topic]",
+		Short:              "print help for a command, or a reference topic",
+		DisableSuggestions: true,
+		SilenceUsage:       true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 1 && args[0] == "exit-codes" {
+				printExitCodes(cmd.OutOrStdout())
+				return nil
+			}
+			if len(args) == 0 {
+				printRootHelp(cmd.OutOrStdout())
+				return nil
+			}
+
+			// A command path, which is what `outplane help app list` means.
+			target, _, err := cmd.Root().Find(args)
+			if err == nil && target != cmd.Root() {
+				target.HelpFunc()(target, args)
+				return nil
+			}
+
+			return report(cmd, exec, clierr.New(clierr.KindUsage,
+				"no help topic called %q", strings.Join(args, " ")).
+				WithCode("usage.unknown_topic").
+				WithHint("The topics are: exit-codes. Anything else is a command path.").
+				WithStep("see the exit code table", "outplane", "help", "exit-codes").
+				WithStep("see a command's help", "outplane", "app", "list", "--help"))
+		},
+	}
+}
+
+// printExitCodes writes the table a script author needs and nobody can guess.
+func printExitCodes(w io.Writer) {
+	fmt.Fprintln(w, "Every command exits with one of these. The numbers are a contract:")
+	fmt.Fprintln(w, "they are appended to, never reused, and never given a new meaning.")
+	fmt.Fprintln(w)
+	for _, e := range clierr.ExitCodes() {
+		kind := e.Kind
+		if kind == "" {
+			kind = "-"
+		}
+		note := ""
+		if e.Retryable {
+			note = " [retryable]"
+		}
+		fmt.Fprintf(w, "  %-4d %-20s %s%s\n", e.Code, kind, e.What, note)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "In a machine format the same failure arrives as an error object on stdout,")
+	fmt.Fprintln(w, "carrying kind, code, hint and next_steps. `outplane schema` publishes which")
+	fmt.Fprintln(w, "codes each command can produce.")
 }
 
 func newVersionCommand() *cobra.Command {
