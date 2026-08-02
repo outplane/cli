@@ -297,6 +297,11 @@ type AppDetail struct {
 	Directory    string `json:"directory"`
 	StartCommand string `json:"startCommand"`
 
+	// IncludePaths and IgnorePaths decide whether a push builds at all. They
+	// are glob patterns, one per line, and empty means every push builds.
+	IncludePaths string `json:"includePaths"`
+	IgnorePaths  string `json:"ignorePaths"`
+
 	// URL is where the app can be reached, which is what somebody means by "the
 	// app's URL". Endpoints has the rest.
 	URL       string     `json:"url"`
@@ -342,6 +347,9 @@ type appDetailDTO struct {
 	BuildMethod  int    `json:"buildMethod"`
 	Directory    string `json:"directory"`
 	StartCommand string `json:"startCommand"`
+
+	BuildFilterIncludePaths string `json:"buildFilterIncludePaths"`
+	BuildFilterIgnorePaths  string `json:"buildFilterIgnorePaths"`
 
 	MinScale     int    `json:"minScale"`
 	InstanceType string `json:"instanceType"`
@@ -406,6 +414,8 @@ func GetApp(ctx context.Context, c *api.Client, appID string) (AppDetail, error)
 		BuildMethod:   buildMethodNames.name(d.BuildMethod),
 		Directory:     d.Directory,
 		StartCommand:  d.StartCommand,
+		IncludePaths:  d.BuildFilterIncludePaths,
+		IgnorePaths:   d.BuildFilterIgnorePaths,
 		CommitMessage: d.CommitMessage,
 		CreatedAt:     serverInstant(d.CreatedDate),
 		Endpoints:     make([]Endpoint, 0, len(d.AppPorts)),

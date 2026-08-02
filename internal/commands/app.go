@@ -142,6 +142,8 @@ func appDetailTable(d core.AppDetail) output.Table {
 			"buildMethod":      d.BuildMethod,
 			"directory":        nilIfEmpty(d.Directory),
 			"startCommand":     nilIfEmpty(d.StartCommand),
+			"includePaths":     nilIfEmpty(d.IncludePaths),
+			"ignorePaths":      nilIfEmpty(d.IgnorePaths),
 			"commitMessage":    nilIfEmpty(d.CommitMessage),
 			"lastDeployedAt":   nilIfEmpty(d.LastDeployedAt),
 			"createdAt":        nilIfEmpty(d.CreatedAt),

@@ -28,7 +28,19 @@ type Request struct {
 	CLI   *cli.Context
 	Args  []string
 	Flags Flags
+
+	// GivenFlags is which flags the caller actually wrote, read through Given.
+	GivenFlags map[string]bool
 }
+
+// Given reports whether a flag was written, rather than left at its default.
+//
+// Most commands never need this: a flag that was not given and one given as an
+// empty string both arrive as "" and both mean the same thing. It exists for
+// the ones where the empty string is itself a value. `build set
+// --start-command ""` clears the start command, and not passing the flag at all
+// has to leave it exactly as it was; without this the two are the same request.
+func (r Request) Given(flag string) bool { return r.GivenFlags[flag] }
 
 // Flags is parsed flag values, keyed by flag name without dashes.
 //

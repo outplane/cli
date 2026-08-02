@@ -469,9 +469,10 @@ func execute(
 	}
 
 	result, err := handler(ctx, commands.Request{
-		CLI:   rt,
-		Args:  args,
-		Flags: flagValues(cmd, decl),
+		CLI:        rt,
+		Args:       args,
+		Flags:      flagValues(cmd, decl),
+		GivenFlags: flagsGiven(cmd, decl),
 	})
 	if err != nil {
 		return finish(rt.Out.Error(err), err)
@@ -610,6 +611,18 @@ func flagValues(cmd *cobra.Command, decl registry.Command) commands.Flags {
 		}
 	}
 	return values
+}
+
+// flagsGiven records which flags the caller wrote.
+//
+// cobra knows, and a handler cannot tell from the value alone: an unset string
+// flag and one set to "" are both "". See commands.Request.Given.
+func flagsGiven(cmd *cobra.Command, decl registry.Command) map[string]bool {
+	given := make(map[string]bool, len(decl.Flags))
+	for _, fl := range decl.Flags {
+		given[fl.Name] = cmd.Flags().Changed(fl.Name)
+	}
+	return given
 }
 
 // newSchemaCommand builds `outplane schema`.

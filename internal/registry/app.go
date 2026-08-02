@@ -245,6 +245,16 @@ func appGet() Command {
 			},
 			{Name: "directory", Type: "string | null", Description: "sub-directory built, when the repository holds more than one app"},
 			{Name: "startCommand", Type: "string | null", Description: "override for the image's own command"},
+			{
+				Name:        "includePaths",
+				Type:        "string | null",
+				Description: "glob patterns, one per line. A push touching none of them does not build",
+			},
+			{
+				Name:        "ignorePaths",
+				Type:        "string | null",
+				Description: "glob patterns, one per line. A push touching only these does not build",
+			},
 			{Name: "commitMessage", Type: "string | null", Description: "of the deployed commit"},
 			{
 				Name:        "lastDeployedAt",
