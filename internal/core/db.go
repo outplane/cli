@@ -276,3 +276,36 @@ func CheckDatabaseRegion(region string) error {
 	}
 	return nil
 }
+
+// Creating and removing what is inside an instance.
+//
+// One endpoint creates either a role or a database, told apart by which fields
+// are sent. They are separate functions here because they are separate things:
+// a role is a login, a database is a place to put tables, and a database has to
+// name the role that owns it.
+
+// CreateDBRole adds a login to an instance.
+func CreateDBRole(ctx context.Context, c *api.Client, id, role string) error {
+	body := map[string]any{"dataStorageId": id, "roleName": role}
+	return c.Post(ctx, "/DataStorage/CreateDataStorageRoleOrDatabase", body, nil)
+}
+
+// CreateDBSchema adds a database to an instance, owned by an existing role.
+func CreateDBSchema(ctx context.Context, c *api.Client, id, database, owner string) error {
+	body := map[string]any{
+		"dataStorageId":         id,
+		"databaseName":          database,
+		"databaseOwnerRoleName": owner,
+	}
+	return c.Post(ctx, "/DataStorage/CreateDataStorageRoleOrDatabase", body, nil)
+}
+
+// DeleteDBRole removes a login.
+func DeleteDBRole(ctx context.Context, c *api.Client, id, role string) error {
+	return c.Delete(ctx, "/DataStorage/DeleteDataStorageRole/"+id+"/"+role, nil)
+}
+
+// DeleteDBSchema removes a database and everything in it.
+func DeleteDBSchema(ctx context.Context, c *api.Client, id, database string) error {
+	return c.Delete(ctx, "/DataStorage/DeleteDataStorageDatabase/"+id+"/"+database, nil)
+}
