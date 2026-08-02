@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/outplane/cli/internal/api"
 )
@@ -11,6 +12,11 @@ import (
 type Deployment struct {
 	ID    int    `json:"deploymentId"`
 	AppID string `json:"appId"`
+
+	// App is the application's name. The API fills it in only on the team-wide
+	// feed, where a row would otherwise be unattributable; when a caller asked
+	// about one application it already knows the answer and passes it in.
+	App string `json:"app"`
 
 	// Status is the decoded AppDeploymentStatus. An unrecognised value arrives
 	// here as "unknown:N" and is never interpreted as either success or
@@ -81,6 +87,84 @@ func GetDeployment(ctx context.Context, c *api.Client, appID string, id int) (De
 		StartedAt:     serverInstant(dto.CreatedDate),
 		Duration:      dto.DurationSecondsText,
 	}, nil
+}
+
+// deploymentListDTO is the wire shape of both list endpoints.
+//
+// They return the same row, which is why one type serves both. Note the status
+// field: the detail endpoint calls it "status" and the list endpoints call it
+// "appDeploymentStatus", so the two cannot share a decoder however similar they
+// look.
+type deploymentListDTO struct {
+	ID      int    `json:"id"`
+	AppID   string `json:"appId"`
+	AppName string `json:"appName"`
+	Status  int    `json:"appDeploymentStatus"`
+
+	Branch        string `json:"branch"`
+	ImageName     string `json:"imageName"`
+	CommitMessage string `json:"commitMessage"`
+	CreatedDate   string `json:"createdDate"`
+
+	DurationSecondsText string `json:"durationSecondsText"`
+}
+
+// ListDeployments returns one application's deployment history, newest first.
+//
+// The order is the CLI's. The server returns them oldest first, which is the
+// wrong way round for a history: the row somebody wants is almost always the
+// last one, and a list that puts it at the bottom makes every reader scroll.
+func ListDeployments(ctx context.Context, c *api.Client, appID, appName string) ([]Deployment, error) {
+	var dtos []deploymentListDTO
+	if err := c.Get(ctx, "/AppDeployment/GetAppDeploymentsByAppId/"+appID, &dtos); err != nil {
+		return nil, err
+	}
+	return decodeDeployments(dtos, appName), nil
+}
+
+// ListTeamDeployments returns the most recent deployments across the team.
+//
+// This endpoint is the only paginated one in the API, and it pages from one
+// rather than from zero. A caller wanting "the last twenty" asks for the first
+// page of twenty; there is no cursor and no total, so there is nothing to
+// report about what lies beyond it.
+func ListTeamDeployments(ctx context.Context, c *api.Client, limit int) ([]Deployment, error) {
+	var dtos []deploymentListDTO
+	path := fmt.Sprintf("/AppDeployment/GetAppDeploymentsByTeamId/1/%d", limit)
+	if err := c.Get(ctx, path, &dtos); err != nil {
+		return nil, err
+	}
+	return decodeDeployments(dtos, ""), nil
+}
+
+// decodeDeployments turns the wire rows into the CLI's shape, newest first.
+//
+// appName is the fallback for rows the server left unattributed, which is every
+// row of an application-scoped list.
+func decodeDeployments(dtos []deploymentListDTO, appName string) []Deployment {
+	out := make([]Deployment, 0, len(dtos))
+	for _, d := range dtos {
+		name := d.AppName
+		if name == "" {
+			name = appName
+		}
+		out = append(out, Deployment{
+			ID:            d.ID,
+			AppID:         d.AppID,
+			App:           name,
+			Status:        deploymentStatusNames.name(d.Status),
+			Branch:        d.Branch,
+			ImageRef:      d.ImageName,
+			CommitMessage: d.CommitMessage,
+			StartedAt:     serverInstant(d.CreatedDate),
+			Duration:      d.DurationSecondsText,
+		})
+	}
+
+	// Newest first, by id. The id is a sequence, so it orders deployments even
+	// when two of them share a timestamp to the second.
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ID > out[j].ID })
+	return out
 }
 
 // LogChunk is one slice of a build log, plus where to resume from.

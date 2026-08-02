@@ -142,7 +142,7 @@ func appList() Command {
 				"deployment does not touch. Sort on the first to find what is stale.",
 		},
 
-		Related: []string{"app get", "app instances", "deploy list", "status"},
+		Related: []string{"app get", "deploy list", "metrics", "status"},
 
 		DocsURL: "https://docs.outplane.com/cli/app",
 	}
@@ -418,7 +418,7 @@ func appDelete() Command {
 			"Deletion is irreversible. There is no undelete and no retention window.",
 		},
 
-		Related: []string{"app list", "app get", "volume detach", "volume list"},
+		Related: []string{"app list", "app get", "deploy list"},
 
 		DocsURL: "https://docs.outplane.com/cli/app",
 	}

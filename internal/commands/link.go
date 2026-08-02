@@ -170,13 +170,33 @@ func resolveApp(ctx context.Context, req Request, ref string) (core.App, error) 
 // whose app argument is optional shares this, which is what keeps the
 // resolution order from drifting between them.
 func targetApp(ctx context.Context, req Request, command ...string) (core.App, error) {
-	if len(req.Args) > 0 {
+	return targetAppRef(ctx, req, argAt(req.Args, 0), command...)
+}
+
+// argAt returns a positional argument, or nil when it was not given.
+//
+// The pointer carries the one distinction a plain string cannot: an argument
+// that is absent is a request for the default, and an argument that is present
+// but empty is an unset shell variable. Collapsing the two is how
+// `outplane app get "$APP"` came to answer a question nobody asked.
+func argAt(args []string, i int) *string {
+	if i >= len(args) {
+		return nil
+	}
+	return &args[i]
+}
+
+// targetAppRef is targetApp for a command whose application is not the first
+// argument. `deploy get 42 checkout` is the case: the id comes first, so the
+// reference has to be handed in rather than read from a fixed position.
+func targetAppRef(ctx context.Context, req Request, ref *string, command ...string) (core.App, error) {
+	if ref != nil {
 		// See emptyAppArgument: an empty argument is an unset variable, not a
 		// request for the default.
-		if strings.TrimSpace(req.Args[0]) == "" {
+		if strings.TrimSpace(*ref) == "" {
 			return core.App{}, emptyAppArgument()
 		}
-		return resolveApp(ctx, req, req.Args[0])
+		return resolveApp(ctx, req, *ref)
 	}
 
 	if id := req.CLI.Config.AppID.Value; id != "" {

@@ -69,7 +69,7 @@ func deployCreate(ctx context.Context, req Request) (output.Table, error) {
 
 	if !wait {
 		req.CLI.Out.Note("Deployment %d queued for %s. It is not finished.", id, app.Name)
-		req.CLI.Out.Note("Check it with: outplane deploy get %d", id)
+		req.CLI.Out.Note("Check it with: outplane deploy get %d %s", id, app.Name)
 		return deployTable(app, deployment, true), nil
 	}
 
@@ -135,7 +135,7 @@ func awaitDeployment(
 				"deployment %d was still %s when the timeout expired", current.ID, current.Status).
 				WithCode("deploy.timeout").
 				WithHint("The build is still running on the server; only this command stopped waiting.").
-				WithStep("check it later", "outplane", "deploy", "get", fmt.Sprint(current.ID))
+				WithStep("check it later", "outplane", "deploy", "get", fmt.Sprint(current.ID), app.Name)
 		}
 
 		select {

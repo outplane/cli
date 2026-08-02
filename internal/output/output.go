@@ -259,7 +259,15 @@ func (w *Writer) text(t Table) error {
 	}
 
 	if t.Truncated {
-		fmt.Fprintf(w.Err, "\nShowing %d of %d. The result was truncated.\n", len(t.Rows), t.Total)
+		// Two sentences, because a truncated result comes in two kinds. Where
+		// the source knows how many exist, saying so tells the reader how much
+		// they are missing. Where it does not, "showing 3 of 3, truncated" is
+		// a contradiction, and the honest line is that there are more.
+		if t.Total > len(t.Rows) {
+			fmt.Fprintf(w.Err, "\nShowing %d of %d. The result was truncated.\n", len(t.Rows), t.Total)
+		} else {
+			fmt.Fprintf(w.Err, "\nShowing %d. There are more.\n", len(t.Rows))
+		}
 	}
 	w.footer(t)
 	return nil
