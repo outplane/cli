@@ -2,10 +2,7 @@ package commands
 
 import (
 	"context"
-	"fmt"
-	"strings"
 
-	"github.com/outplane/cli/internal/api"
 	"github.com/outplane/cli/internal/clierr"
 	"github.com/outplane/cli/internal/core"
 	"github.com/outplane/cli/internal/output"
@@ -19,14 +16,17 @@ func init() {
 //
 // The confirmation is not a prompt. This CLI never asks a question, because a
 // question has no answer in CI and an agent will answer any question it is
-// asked; instead an unconfirmed call exits 4 and returns the exact command
-// that would proceed. That pushes the decision to whoever is accountable for
-// it, which is the point of the whole protocol.
+// asked; instead an unconfirmed call exits 4 and returns the exact command that
+// would proceed. That pushes the decision to whoever is accountable for it,
+// which is the point of the whole protocol.
 //
-// Before any of that it reports what would stop the deletion. The platform
-// refuses to delete an application that still has a custom domain, an attached
-// volume or a deployment in flight, and finding that out after typing a
-// confirmation is a worse experience than being told first.
+// What the platform refuses to delete is deliberately not enumerated here. It
+// refuses while a custom domain, an attached volume or a deployment in flight
+// exists, and an earlier version of this command read all three first so it
+// could name them. That was three extra requests on every deletion and, worse,
+// a second copy of a rule owned by the server: the day a fourth condition is
+// added, a CLI that lists three would report "nothing is in the way" and then
+// fail. The server decides, this reports what it said.
 func appDelete(ctx context.Context, req Request) (output.Table, error) {
 	app, err := targetApp(ctx, req, "app", "delete")
 	if err != nil {
@@ -38,79 +38,22 @@ func appDelete(ctx context.Context, req Request) (output.Table, error) {
 		return output.Table{}, err
 	}
 
-	blockers, err := deletionBlockers(ctx, client, app)
-	if err != nil {
-		return output.Table{}, err
-	}
-
 	if req.CLI.DryRun {
-		describeDeletion(req, app, blockers)
-		return deleteTable(app, blockers, false), nil
+		req.CLI.Out.Note("%s (%s) would be deleted, along with its deployment history.", app.Name, app.ID)
+		req.CLI.Out.Note("Whether it can be is decided when the deletion is attempted.")
+		return deleteTable(app, false), nil
 	}
 
 	if err := checkDeleteConfirmed(req, app); err != nil {
-		describeDeletion(req, app, blockers)
 		return output.Table{}, err
 	}
 
 	if err := core.DeleteApp(ctx, client, app.ID); err != nil {
-		return output.Table{}, explainFailedDelete(err, app, blockers)
+		return output.Table{}, explainRefusal(err, app)
 	}
 
 	req.CLI.Out.Note("Deleted %s.", app.Name)
-	return deleteTable(app, nil, true), nil
-}
-
-// blocker is one reason the platform will refuse the deletion.
-type blocker struct {
-	Kind   string
-	Detail string
-}
-
-// deletionBlockers asks the three questions the server will ask.
-//
-// It costs three requests, and they are worth it on a command that cannot be
-// undone: without them the reader learns about an attached volume from a 400
-// that names neither the volume nor which of the three rules it broke.
-func deletionBlockers(ctx context.Context, client *api.Client, app core.App) ([]blocker, error) {
-	var blockers []blocker
-
-	detail, err := core.GetApp(ctx, client, app.ID)
-	if err != nil {
-		return nil, err
-	}
-	for _, endpoint := range detail.Endpoints {
-		for _, domain := range endpoint.CustomDomains {
-			blockers = append(blockers, blocker{Kind: "customDomain", Detail: domain})
-		}
-	}
-
-	volumes, err := core.AppVolumes(ctx, client, app.ID)
-	if err != nil {
-		return nil, err
-	}
-	for _, v := range volumes {
-		blockers = append(blockers, blocker{
-			Kind:   "volume",
-			Detail: fmt.Sprintf("%s at %s", v.Name, v.MountPath),
-		})
-	}
-
-	deployments, err := core.ListDeployments(ctx, client, app.ID, app.Name)
-	if err != nil {
-		return nil, err
-	}
-	for _, d := range deployments {
-		if core.Finished(d.Status) {
-			continue
-		}
-		blockers = append(blockers, blocker{
-			Kind:   "deployment",
-			Detail: fmt.Sprintf("%d is %s", d.ID, d.Status),
-		})
-	}
-
-	return blockers, nil
+	return deleteTable(app, true), nil
 }
 
 // checkDeleteConfirmed enforces the two-step confirmation.
@@ -154,65 +97,33 @@ func confirmationRequired(app core.App, hint string, args ...any) error {
 		WithConfirmCommand("outplane", "app", "delete", app.Name, "--yes", "--confirm-name", app.Name)
 }
 
-// describeDeletion prints what is about to go, and what stands in the way.
+// explainRefusal adds a way forward to the server's own refusal.
 //
-// It writes to stderr, because it is a warning about a result rather than the
-// result. A dry run's actual answer is the row, which stays parseable.
-func describeDeletion(req Request, app core.App, blockers []blocker) {
-	req.CLI.Out.Note("%s (%s) would be deleted, along with its deployment history.", app.Name, app.ID)
-
-	if len(blockers) == 0 {
-		req.CLI.Out.Note("Nothing is holding it back.")
-		return
-	}
-
-	req.CLI.Out.Note("The platform will refuse while these exist:")
-	for _, b := range blockers {
-		req.CLI.Out.Note("  %-13s %s", b.Kind, b.Detail)
-	}
-}
-
-// explainFailedDelete turns the server's refusal into one that names the thing.
-//
-// The API answers all three of its rules with the same shape of 400 and a
-// sentence that names no domain, no volume and no deployment. The blockers were
-// already read, so the CLI can say which one.
-func explainFailedDelete(err error, app core.App, blockers []blocker) error {
+// The message is passed through untouched, because the server names which of
+// its rules was broken and is the only thing that knows the full list. What the
+// CLI adds is where to look: the domains and the volumes are both reported by
+// commands the reader already has.
+func explainRefusal(err error, app core.App) error {
 	e := clierr.AsError(err)
-	if e == nil || e.Kind != clierr.KindUsage || len(blockers) == 0 {
+	if e == nil || e.Kind != clierr.KindUsage {
 		return err
-	}
-
-	details := make([]string, 0, len(blockers))
-	for _, b := range blockers {
-		details = append(details, b.Kind+" "+b.Detail)
 	}
 
 	return e.
 		WithCode("app.delete_blocked").
-		WithHint("%s still has: %s. Each has to be removed before the application can be.",
-			app.Name, strings.Join(details, ", ")).
-		WithDetail("blockers", blockerDetails(blockers))
+		WithStep("see its domains and ports", "outplane", "app", "get", app.Name).
+		WithStep("see deployments still in flight", "outplane", "deploy", "list", app.Name)
 }
 
-func deleteTable(app core.App, blockers []blocker, deleted bool) output.Table {
+func deleteTable(app core.App, deleted bool) output.Table {
 	return output.Table{
 		Single:  true,
-		Columns: []string{"deleted", "app", "blockers"},
+		Columns: []string{"deleted", "app"},
 		Total:   1,
 		Rows: []map[string]any{{
-			"deleted":  deleted,
-			"app":      app.Name,
-			"appId":    app.ID,
-			"blockers": blockerDetails(blockers),
+			"deleted": deleted,
+			"app":     app.Name,
+			"appId":   app.ID,
 		}},
 	}
-}
-
-func blockerDetails(blockers []blocker) []map[string]any {
-	out := make([]map[string]any, 0, len(blockers))
-	for _, b := range blockers {
-		out = append(out, map[string]any{"kind": b.Kind, "detail": b.Detail})
-	}
-	return out
 }

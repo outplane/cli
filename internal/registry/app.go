@@ -334,10 +334,10 @@ func appDelete() Command {
 		Short: "permanently delete an application",
 		Long: "Deletes an application and its deployment history.\n\n" +
 			"There is no undelete and no retention window.\n\n" +
-			"Three things stop a deletion rather than being deleted with it: a custom " +
-			"domain, an attached volume, and a deployment still in flight. Each has to be " +
-			"removed first. --dry-run reports which of them apply before you type a " +
-			"confirmation.",
+			"The platform refuses while certain things still exist, a custom domain and an " +
+			"attached volume among them, and its refusal says which. Those are the server's " +
+			"rules and it is the only thing that knows the whole list, so this command does " +
+			"not try to predict them.",
 
 		Risk:         RiskDestructive,
 		RequiresAuth: true,
@@ -346,12 +346,7 @@ func appDelete() Command {
 
 		SupportsDryRun: true,
 
-		APICalls: []string{
-			"GET /api/App/GetAppById/{appId}",
-			"GET /api/Volume/GetVolumesByAppId/{appId}",
-			"GET /api/AppDeployment/GetAppDeploymentsByAppId/{appId}",
-			"DELETE /api/App/DeleteApplication/{appId}",
-		},
+		APICalls: []string{"DELETE /api/App/DeleteApplication/{appId}"},
 
 		Args: []Arg{
 			{
@@ -380,15 +375,9 @@ func appDelete() Command {
 		},
 
 		OutputFields: []Field{
-			{Name: "deleted", Type: "bool", Description: "false for a dry run, and for a refusal"},
+			{Name: "deleted", Type: "bool", Description: "false for a dry run"},
 			{Name: "app", Type: "string", Description: "the application's immutable name"},
 			{Name: "appId", Type: "string"},
-			{
-				Name: "blockers",
-				Type: "array",
-				Description: "what would stop the deletion: {kind, detail}, where kind is " +
-					"customDomain, volume or deployment. Empty when nothing is in the way",
-			},
 		},
 
 		ErrorCodes: []string{
@@ -402,18 +391,12 @@ func appDelete() Command {
 
 		Examples: []Example{
 			{
-				Title:        "see what would stop the deletion, before confirming anything",
+				Title:        "confirm which application the name resolves to, before confirming anything",
 				Command:      "outplane app delete checkout --dry-run --json",
 				Argv:         []string{"outplane", "app", "delete", "checkout", "--dry-run", "--json"},
 				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
 				Risk:         RiskRead,
-				OutputSample: map[string]any{
-					"deleted": false,
-					"app":     "checkout",
-					"blockers": []any{
-						map[string]any{"kind": "customDomain", "detail": "https://checkout.example.com"},
-					},
-				},
+				OutputSample: map[string]any{"deleted": false, "app": "checkout"},
 			},
 			{
 				Title:        "request deletion. Returns exit 4 with a command to replay",
@@ -438,9 +421,10 @@ func appDelete() Command {
 			"Under a detected agent harness it exits 4 even when --yes and --confirm-name are " +
 				"supplied. A flag is not a safety boundary, because an agent that read this " +
 				"note can emit any flag in it; the harness's own approval step is the gate.",
-			"A custom domain, an attached volume or a deployment in flight each stop the " +
-				"deletion instead of being removed with it. blockers lists them, in --dry-run " +
-				"before anything is attempted and in the error when the server refuses.",
+			"Some things stop a deletion instead of being removed with it: a custom domain " +
+				"and an attached volume are two. The server owns that list and its refusal " +
+				"names the rule, so --dry-run reports what would be deleted rather than " +
+				"predicting whether it can be.",
 			"--confirm-name is matched against the immutable name, not the display name.",
 			"Deletion is irreversible. There is no undelete and no retention window.",
 		},
