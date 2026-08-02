@@ -43,6 +43,20 @@ type NewApp struct {
 
 	Ports []NewPort
 	Env   map[string]string
+
+	// Volumes and EnvGroups reference things that already exist. The server
+	// attaches each one inside a try/catch and carries on when it cannot, so a
+	// wrong id produces an application without the attachment and no error at
+	// all. Whoever asks for one has to read back what they got; see
+	// AppVolumes and AppEnvGroups.
+	Volumes   []Mount
+	EnvGroups []string
+}
+
+// Mount is an existing volume and where it should appear in the container.
+type Mount struct {
+	VolumeID string
+	Path     string
 }
 
 // NewPort is one port the application will serve.
@@ -96,19 +110,21 @@ func CreateApp(ctx context.Context, c *api.Client, teamID string, app NewApp) (C
 // consistently, and this is not the place to find out which.
 func (a NewApp) body(teamID string) map[string]any {
 	body := map[string]any{
-		"Name":             a.Name,
-		"TeamId":           teamID,
-		"MinScale":         a.Instances,
-		"InstanceType":     a.InstanceType,
-		"Directory":        a.Directory,
-		"StartCommand":     a.StartCommand,
-		"AppEnvironments":  envPairs(a.Env),
-		"Ports":            portBodies(a.Ports),
-		"isPublicSource":   a.PublicRepo,
-		"sourceProvider":   sourceProviderValue(a.Image != ""),
-		"SourceRepository": a.Repository,
-		"Branch":           a.Branch,
-		"BuildMethod":      buildMethodValue(a.BuildMethod),
+		"Name":                a.Name,
+		"TeamId":              teamID,
+		"MinScale":            a.Instances,
+		"InstanceType":        a.InstanceType,
+		"Directory":           a.Directory,
+		"StartCommand":        a.StartCommand,
+		"AppEnvironments":     envPairs(a.Env),
+		"Ports":               portBodies(a.Ports),
+		"VolumeMounts":        mountBody(a.Volumes),
+		"EnvVariableGroupIds": a.EnvGroups,
+		"isPublicSource":      a.PublicRepo,
+		"sourceProvider":      sourceProviderValue(a.Image != ""),
+		"SourceRepository":    a.Repository,
+		"Branch":              a.Branch,
+		"BuildMethod":         buildMethodValue(a.BuildMethod),
 	}
 
 	if a.Image != "" {
@@ -170,6 +186,18 @@ func sortedEnvKeys(env map[string]string) []string {
 	return keys
 }
 
+// mountBody builds the volume dictionary, keyed by id.
+//
+// A map means the same volume cannot be mounted twice, which is also the
+// server's rule: a volume belongs to one application at one path.
+func mountBody(mounts []Mount) map[string]string {
+	body := make(map[string]string, len(mounts))
+	for _, m := range mounts {
+		body[m.VolumeID] = m.Path
+	}
+	return body
+}
+
 func portBodies(ports []NewPort) []map[string]any {
 	out := make([]map[string]any, 0, len(ports))
 	for _, p := range ports {
@@ -196,7 +224,28 @@ func (a NewApp) Check() error {
 	if err := a.checkSize(); err != nil {
 		return err
 	}
-	return a.checkPorts()
+	if err := a.checkPorts(); err != nil {
+		return err
+	}
+	return a.checkMounts()
+}
+
+func (a NewApp) checkMounts() error {
+	seen := make(map[string]bool, len(a.Volumes))
+	for _, m := range a.Volumes {
+		switch {
+		case m.VolumeID == "":
+			return usage("a volume mount needs a volume id", "app.mount_invalid", "")
+		case !strings.HasPrefix(m.Path, "/"):
+			return usage(fmt.Sprintf("%q is not an absolute path", m.Path), "app.mount_invalid",
+				"A mount path is where the disk appears inside the container, such as /data.")
+		case seen[m.VolumeID]:
+			return usage(fmt.Sprintf("volume %s was given twice", m.VolumeID), "app.mount_duplicate",
+				"A volume belongs to one application at one path.")
+		}
+		seen[m.VolumeID] = true
+	}
+	return nil
 }
 
 func (a NewApp) checkName() error {

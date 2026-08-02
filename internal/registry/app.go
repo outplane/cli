@@ -424,6 +424,15 @@ func appCreate() Command {
 				Name: "instances", Type: "int", Default: "1",
 				Description: "replica count, 1 to 5",
 			},
+			{
+				Name: "volume", Type: "strings",
+				Description: "VOLUME_ID:/path, repeatable. The volume must already exist and " +
+					"be detached",
+			},
+			{
+				Name: "env-group", Type: "strings",
+				Description: "id of a shared variable group to assign, repeatable",
+			},
 		},
 
 		OutputFields: []Field{
@@ -447,6 +456,24 @@ func appCreate() Command {
 			{Name: "instances", Type: "int"},
 			{Name: "ports", Type: "array", Description: "{port, scheme, public}"},
 			{Name: "envCount", Type: "int", Description: "how many variables were set. Values are never returned"},
+			{
+				Name: "volumes",
+				Type: "array",
+				Description: "the volumes actually attached, read back after creation: " +
+					"{volumeId, name, mountPath, sizeGb}. Present only when --volume was given",
+			},
+			{
+				Name:        "volumesRequested",
+				Type:        "int",
+				Description: "how many were asked for, which may exceed what attached",
+			},
+			{
+				Name: "envGroups",
+				Type: "array",
+				Description: "the groups actually assigned: {groupId, name, variables}. " +
+					"Present only when --env-group was given",
+			},
+			{Name: "envGroupsRequested", Type: "int"},
 			{Name: "changed", Type: "bool", Description: "false for a dry run"},
 		},
 
@@ -462,6 +489,9 @@ func appCreate() Command {
 			"app.port_invalid",
 			"app.port_duplicate",
 			"app.repository_unavailable",
+			"app.mount_invalid",
+			"app.mount_duplicate",
+			"usage.bad_mount",
 			"usage.bad_port",
 			"usage.bad_assignment",
 			"quota.limit_reached",
@@ -519,6 +549,11 @@ func appCreate() Command {
 				"The exceptions are the plan limit and the name already being taken, which only " +
 				"the server knows.",
 			"Variable values are never echoed back. envCount reports how many were set.",
+			"A volume or a group the server cannot attach does not fail the creation: it " +
+				"attaches what it can and says nothing about the rest. The CLI reads back what " +
+				"actually attached, warns about each one that did not, and reports both counts. " +
+				"Compare volumes against volumesRequested rather than assuming exit 0 means all " +
+				"of them.",
 		},
 
 		Related: []string{"app list", "app get", "deploy create", "env set", "app delete"},
