@@ -19,6 +19,10 @@ func init() {
 		appList(),
 		appGet(),
 		appCreate(),
+		appScale(),
+		appPause(),
+		appResume(),
+		appInstances(),
 		appDelete(),
 	)
 }
@@ -537,6 +541,275 @@ func appCreate() Command {
 		},
 
 		Related: []string{"app list", "app get", "deploy create", "env set", "app delete"},
+		DocsURL: "https://docs.outplane.com/cli/app",
+	}
+}
+
+// The running-state commands: how many, how large, and whether at all.
+//
+// They share a property nothing else on this platform has. An environment
+// variable waits for the next deployment; these refresh the workload
+// immediately, so the effect is visible in seconds and needs no deploy.
+
+func appScale() Command {
+	return Command{
+		Path:  []string{"app", "scale"},
+		Short: "change how many instances an application runs, and how large they are",
+		Long: "Sets the replica count, the instance size, or both.\n\n" +
+			"Whichever one you do not pass keeps its current value. That is not a " +
+			"convenience: the endpoint replaces both together and defaults the count to " +
+			"one, so a command that sent only a size would quietly scale the application " +
+			"down.\n\n" +
+			"The change is applied to the running application without a deployment.",
+
+		Risk:         RiskWrite,
+		RequiresAuth: true,
+		Session:      SessionAny,
+		Idempotent:   true,
+
+		SupportsDryRun: true,
+
+		APICalls: []string{
+			"GET /api/App/GetAppsByTeamId",
+			"PUT /api/AppSetting/UpdateScaleSettings/{appId}",
+		},
+
+		Args: []Arg{
+			{
+				Name:     "app",
+				Short:    "app name or id. Defaults to the linked app",
+				Required: false,
+				Resolves: "app",
+			},
+		},
+
+		Flags: []Flag{
+			{Name: "instances", Type: "int", Description: "replica count, 1 to 5"},
+			{
+				Name: "size", Type: "string",
+				Enum:        []string{"op-20", "op-22", "op-34", "op-46", "op-58", "op-70", "op-82", "op-94"},
+				Description: "instance type. The larger ones need a paid plan",
+			},
+		},
+
+		OutputFields: []Field{
+			{Name: "app", Type: "string"},
+			{Name: "appId", Type: "string"},
+			{Name: "instances", Type: "int", Description: "what it will run"},
+			{Name: "size", Type: "string"},
+			{Name: "previousInstances", Type: "int"},
+			{Name: "previousSize", Type: "string"},
+			{Name: "changed", Type: "bool", Description: "false when it already matched, and for a dry run"},
+		},
+
+		ErrorCodes: []string{
+			"app.instances_invalid",
+			"app.size_invalid",
+			"usage.missing_argument",
+			"quota.limit_reached",
+			"app.not_found",
+			"context.no_app",
+		},
+		ExitCodes: []int{0, 2, 3, 5, 7, 8},
+
+		Examples: []Example{
+			{
+				Title:        "run three copies",
+				Command:      "outplane app scale checkout --instances 3",
+				Argv:         []string{"outplane", "app", "scale", "checkout", "--instances", "3"},
+				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:        "give it more memory, keeping the count",
+				Command:      "outplane app scale checkout --size op-34",
+				Argv:         []string{"outplane", "app", "scale", "checkout", "--size", "op-34"},
+				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
+				Risk:         RiskWrite,
+			},
+		},
+
+		AutomationNotes: []string{
+			"The flag you omit is filled in from the current setting, which is read first. " +
+				"Two callers scaling the same application at the same time can therefore " +
+				"overwrite each other; the API offers no partial update.",
+			"Applied without a deployment. The instances change within seconds, and " +
+				"`outplane app instances` shows it happening.",
+			"changed is false when the application already matched, and the command still " +
+				"exits 0: it is a statement of the desired state, not an action.",
+			"A size above the plan's allowance is exit 7, not a validation error. The list of " +
+				"allowed sizes is the team's, not the platform's.",
+		},
+
+		Related: []string{"app instances", "app pause", "app resume", "app get"},
+		DocsURL: "https://docs.outplane.com/cli/app",
+	}
+}
+
+func appPause() Command {
+	return pauseCommand("pause", "stop an application without deleting it",
+		"Stops every instance.\n\n"+
+			"The configured scale is untouched, so resuming returns to the same number of "+
+			"instances rather than to one. Nothing else is removed: the application, its "+
+			"variables, its domains and its volumes all stay.\n\n"+
+			"A paused application costs nothing to run and keeps its address.")
+}
+
+func appResume() Command {
+	return pauseCommand("resume", "start a paused application",
+		"Starts the application again, at the scale it was configured for.\n\n"+
+			"It runs the image from its last deployment: resuming is not a rebuild.")
+}
+
+// pauseCommand is the shared declaration. The two commands differ in one word,
+// and writing that word twice is how a pair like this drifts apart.
+func pauseCommand(verb, short, long string) Command {
+	return Command{
+		Path:  []string{"app", verb},
+		Short: short,
+		Long:  long,
+
+		Risk:         RiskWrite,
+		RequiresAuth: true,
+		Session:      SessionAny,
+		Idempotent:   true,
+
+		SupportsDryRun: true,
+
+		APICalls: []string{
+			"GET /api/App/GetAppsByTeamId",
+			"PUT /api/AppSetting/UpdatePauseState/{appId}",
+		},
+
+		Args: []Arg{
+			{
+				Name:     "app",
+				Short:    "app name or id. Defaults to the linked app",
+				Required: false,
+				Resolves: "app",
+			},
+		},
+
+		OutputFields: []Field{
+			{Name: "app", Type: "string"},
+			{Name: "appId", Type: "string"},
+			{Name: "paused", Type: "bool", Description: "the state the application is now in"},
+			{Name: "instances", Type: "int", Description: "the configured count, which pausing does not change"},
+			{Name: "changed", Type: "bool", Description: "false when it was already in that state"},
+		},
+
+		ErrorCodes: []string{"app.not_found", "context.no_app"},
+		ExitCodes:  []int{0, 2, 3, 5, 8},
+
+		Examples: []Example{
+			{
+				Title:        verb + " an application",
+				Command:      "outplane app " + verb + " checkout",
+				Argv:         []string{"outplane", "app", verb, "checkout"},
+				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
+				Risk:         RiskWrite,
+			},
+		},
+
+		AutomationNotes: []string{
+			"Idempotent. Pausing something already paused changes nothing, reports " +
+				"changed false, and exits 0.",
+			"Applied immediately, without a deployment.",
+			"The configured replica count is kept, so resuming returns to the scale that was " +
+				"set rather than to a single instance.",
+			"A paused application still reports its last deployment's state in " +
+				"deploymentStatus. status is what says paused.",
+		},
+
+		Related: []string{"app pause", "app resume", "app scale", "app list"},
+		DocsURL: "https://docs.outplane.com/cli/app",
+	}
+}
+
+func appInstances() Command {
+	return Command{
+		Path:  []string{"app", "instances"},
+		Short: "list the instances an application is actually running",
+		Long: "Lists the running copies of an application, with what each one is doing.\n\n" +
+			"This is read from the cluster rather than from the record, so it disagrees " +
+			"with the configured count exactly when that is worth knowing: during a " +
+			"rollout, while an instance restarts, or when one cannot start at all.",
+
+		Risk:         RiskRead,
+		RequiresAuth: true,
+		Session:      SessionAny,
+		Idempotent:   true,
+
+		APICalls: []string{
+			"GET /api/App/GetAppsByTeamId",
+			"GET /api/App/GetInstances/{appId}",
+		},
+
+		Args: []Arg{
+			{
+				Name:     "app",
+				Short:    "app name or id. Defaults to the linked app",
+				Required: false,
+				Resolves: "app",
+			},
+		},
+
+		OutputFields: []Field{
+			{Name: "name", Type: "string", Description: "the instance's own name, which changes on every restart"},
+			{
+				Name: "phase",
+				Type: "string",
+				Description: "the runtime's word for what it is doing, passed through unchanged: " +
+					"Pending, Running, Succeeded, Failed or Unknown",
+			},
+			{
+				Name: "ready",
+				Type: "bool",
+				Description: "whether it is taking traffic. Running and not ready is the " +
+					"interesting state during a rollout",
+			},
+			{Name: "container", Type: "string"},
+			{Name: "startedAt", Type: "string | null", Description: "RFC 3339, UTC"},
+		},
+
+		ErrorCodes: []string{"app.not_found", "context.no_app"},
+		ExitCodes:  []int{0, 2, 3, 5, 8},
+
+		Examples: []Example{
+			{
+				Title:        "what is running right now",
+				Command:      "outplane app instances checkout",
+				Argv:         []string{"outplane", "app", "instances", "checkout"},
+				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
+				Risk:         RiskRead,
+			},
+			{
+				Title:   "wait for a rollout in a script",
+				Command: "outplane app instances --json --fields name,ready",
+				Argv:    []string{"outplane", "app", "instances", "--json", "--fields", "name,ready"},
+				Risk:    RiskRead,
+				OutputSample: map[string]any{
+					"items": []any{
+						map[string]any{"name": "checkout-7d9f-abcde", "ready": true},
+						map[string]any{"name": "checkout-7d9f-fghij", "ready": false},
+					},
+					"total":     2,
+					"truncated": false,
+				},
+			},
+		},
+
+		AutomationNotes: []string{
+			"total is what is running, which is not the configured count. `app list` reports " +
+				"the configuration; a difference between them is a rollout, a restart or a " +
+				"failure to schedule.",
+			"phase comes from the container runtime and is passed through unchanged, so a " +
+				"value this release has never seen still arrives intact.",
+			"An instance name changes every time it restarts. Do not store one.",
+			"A paused application runs nothing, so this is empty and that is not an error.",
+		},
+
+		Related: []string{"app scale", "app pause", "logs", "metrics"},
 		DocsURL: "https://docs.outplane.com/cli/app",
 	}
 }
