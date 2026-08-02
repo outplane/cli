@@ -83,7 +83,7 @@ func domainDNS(ctx context.Context, req Request) (output.Table, error) {
 			WithStep("see what a host needs", "outplane", "domain", "dns", "app.example.com")
 	}
 
-	host := strings.TrimSpace(req.Args[0])
+	host := core.NormalizeHost(req.Args[0])
 	if err := core.CheckHost(host); err != nil {
 		return output.Table{}, err
 	}
@@ -113,7 +113,7 @@ func domainAdd(ctx context.Context, req Request) (output.Table, error) {
 				"--app", "<APP_NAME>", "--port", "3000")
 	}
 
-	host := strings.TrimSpace(req.Args[0])
+	host := core.NormalizeHost(req.Args[0])
 	path := core.NormalizeDomainPath(req.Flags.String("path"))
 
 	if err := core.CheckHost(host); err != nil {
@@ -143,6 +143,12 @@ func domainAdd(ctx context.Context, req Request) (output.Table, error) {
 
 	domain, err := core.AddDomain(ctx, client, host, path, portID)
 	if err != nil {
+		// The server's refusals here are about what already exists, and it says
+		// which. What it cannot say is where to look, so that is added and the
+		// message is left alone.
+		if e := clierr.AsError(err); e != nil && e.Kind == clierr.KindUsage {
+			return output.Table{}, e.WithStep("see the team's domains", "outplane", "domain", "list")
+		}
 		return output.Table{}, err
 	}
 

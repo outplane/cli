@@ -268,9 +268,19 @@ func NormalizeDomainPath(path string) string {
 	return p
 }
 
+// NormalizeHost strips what a zone file allows and a stored record should not
+// keep.
+//
+// A trailing dot marks the root of the DNS tree and means nothing different
+// about the domain, but stored with one it is a different string from the same
+// host without: two routes, two certificates, and a lookup that misses.
+func NormalizeHost(host string) string {
+	return strings.TrimRight(strings.TrimSpace(host), ".")
+}
+
 // CheckHost rejects what the server or DNS would.
 func CheckHost(host string) error {
-	h := strings.TrimSpace(host)
+	h := NormalizeHost(host)
 
 	switch {
 	case h == "":
