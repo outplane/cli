@@ -27,11 +27,16 @@ func init() {
 // positional would be guesswork: `env unset FOO BAR` cannot be read as either
 // "two variables on the linked app" or "one variable on the app FOO" without
 // inventing a rule about which words look like application names. A flag says
-// which is which, and the same flag on all four commands keeps the group
-// consistent with itself.
+// which is which, and the same flag on every command in the group keeps it
+// consistent with itself. The port commands take a list too, and take --app for
+// the same reason, which is why flagApp is shared rather than named for env.
 
-// envApp resolves which application this command acts on.
-func envApp(ctx context.Context, req Request) (core.App, error) {
+// flagApp resolves which application a --app command acts on.
+//
+// command is the path to name in the error, so that somebody who ran
+// `outplane port list` is shown how to fix `outplane port list` rather than
+// something else.
+func flagApp(ctx context.Context, req Request, command ...string) (core.App, error) {
 	if ref := req.Flags.String("app"); strings.TrimSpace(ref) != "" {
 		return resolveApp(ctx, req, ref)
 	}
@@ -39,10 +44,13 @@ func envApp(ctx context.Context, req Request) (core.App, error) {
 		return resolveApp(ctx, req, id)
 	}
 
+	example := append([]string{"outplane"}, command...)
+	example = append(example, "--app", "<APP_NAME>")
+
 	return core.App{}, clierr.New(clierr.KindUsage, "no application given, and this directory is not linked to one").
 		WithCode("context.no_app").
 		WithHint("Name the application with --app, or link the directory once and omit it.").
-		WithStep("name an application", "outplane", "env", "list", "--app", "<APP_NAME>").
+		WithStep("name an application", example...).
 		WithStep("or link this directory", "outplane", "link", "<APP_NAME>").
 		WithStep("see what this team has", "outplane", "app", "list")
 }
@@ -56,7 +64,7 @@ func envApp(ctx context.Context, req Request) (core.App, error) {
 // get` prints a single value with no ceremony, so nothing is hidden, only
 // unasked-for.
 func envList(ctx context.Context, req Request) (output.Table, error) {
-	app, err := envApp(ctx, req)
+	app, err := flagApp(ctx, req, "env", "list")
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -108,7 +116,7 @@ func envGet(ctx context.Context, req Request) (output.Table, error) {
 			WithStep("see which variables are set", "outplane", "env", "list")
 	}
 
-	app, err := envApp(ctx, req)
+	app, err := flagApp(ctx, req, "env", "get")
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -165,7 +173,7 @@ func envSet(ctx context.Context, req Request) (output.Table, error) {
 		return output.Table{}, err
 	}
 
-	app, err := envApp(ctx, req)
+	app, err := flagApp(ctx, req, "env", "set")
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -206,7 +214,7 @@ func envUnset(ctx context.Context, req Request) (output.Table, error) {
 			WithStep("see which variables are set", "outplane", "env", "list")
 	}
 
-	app, err := envApp(ctx, req)
+	app, err := flagApp(ctx, req, "env", "unset")
 	if err != nil {
 		return output.Table{}, err
 	}

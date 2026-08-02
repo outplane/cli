@@ -42,7 +42,7 @@ const defaultEnvFile = ".env"
 // which is what it is for, and why the file is written readable by nobody else
 // and why the reader is told where it landed.
 func envPull(ctx context.Context, req Request) (output.Table, error) {
-	app, err := envApp(ctx, req)
+	app, err := flagApp(ctx, req, "env", "pull")
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -106,7 +106,7 @@ func envPush(ctx context.Context, req Request) (output.Table, error) {
 		return output.Table{}, err
 	}
 
-	app, err := envApp(ctx, req)
+	app, err := flagApp(ctx, req, "env", "push")
 	if err != nil {
 		return output.Table{}, err
 	}

@@ -160,14 +160,72 @@ func parseMounts(values []string) ([]core.Mount, error) {
 	return mounts, nil
 }
 
-// parsePorts reads PORT[:SCHEME[:public|private]].
+// parsePorts reads PORT[:SCHEME[:public|private]] for a new application, where
+// an unwritten part takes its default: a private HTTP port, which is what an
+// application behind another one wants.
 //
-// The shape is positional because the parts have an obvious order and a reader
-// writing --port 3000 means the common case. Everything after the number is
-// optional and defaults to a private HTTP port, which is what an application
-// behind another one wants.
+// The syntax itself lives in parsePortSpecs, because `port set` reads the same
+// argument and cannot use these defaults: there, an unwritten part means the
+// port keeps what it already had.
 func parsePorts(values []string) ([]core.NewPort, error) {
-	ports := make([]core.NewPort, 0, len(values))
+	specs, err := parsePortSpecs(values)
+	if err != nil {
+		return nil, err
+	}
+
+	ports := make([]core.NewPort, 0, len(specs))
+	for _, s := range specs {
+		ports = append(ports, s.withDefaults())
+	}
+	return ports, nil
+}
+
+// portSpec is one PORT[:SCHEME[:public|private]] argument with the parts that
+// were not written left unset.
+//
+// The pointers carry the distinction the parts cannot: `3000` and
+// `3000:http:private` look the same after defaults are applied, and they are
+// different requests when the port already exists. Collapsing them is how a
+// public port becomes private because somebody typed its number.
+type portSpec struct {
+	Port   int
+	Scheme *string
+	Public *bool
+}
+
+// withDefaults is the port to create when there is nothing to keep.
+func (s portSpec) withDefaults() core.NewPort {
+	port := core.NewPort{Port: s.Port, Scheme: "http"}
+	if s.Scheme != nil {
+		port.Scheme = *s.Scheme
+	}
+	if s.Public != nil {
+		port.Public = *s.Public
+	}
+	return port
+}
+
+// appliedTo is the port to send for one that already exists: what was written
+// wins, and what was not is carried over unchanged.
+func (s portSpec) appliedTo(existing core.Endpoint) core.NewPort {
+	port := core.NewPort{Port: s.Port, Scheme: existing.Scheme, Public: existing.Public}
+	if s.Scheme != nil {
+		port.Scheme = *s.Scheme
+	}
+	if s.Public != nil {
+		port.Public = *s.Public
+	}
+	return port
+}
+
+// parsePortSpecs reads the argument's syntax and nothing else.
+//
+// The shape is positional because the parts have an obvious order and somebody
+// writing 3000 means the common case. Whether an omitted part becomes a default
+// or is left alone is the caller's decision, not this function's.
+func parsePortSpecs(values []string) ([]portSpec, error) {
+	specs := make([]portSpec, 0, len(values))
+	seen := make(map[int]bool, len(values))
 
 	for _, raw := range values {
 		parts := strings.Split(raw, ":")
@@ -179,23 +237,36 @@ func parsePorts(values []string) ([]core.NewPort, error) {
 		if err != nil {
 			return nil, badPort(raw, "%q is not a number.", parts[0])
 		}
-
-		port := core.NewPort{Port: number, Scheme: "http"}
-		if len(parts) > 1 && parts[1] != "" {
-			port.Scheme = strings.ToLower(strings.TrimSpace(parts[1]))
+		if seen[number] {
+			// Not badPort: the number is a perfectly good port, and saying it is
+			// not one would send the reader looking at the wrong thing.
+			return nil, clierr.New(clierr.KindUsage, "port %d was given twice", number).
+				WithCode("app.port_duplicate").
+				WithHint("The two would contradict each other and there is no rule saying " +
+					"which of them wins.")
 		}
-		if len(parts) > 2 {
+		seen[number] = true
+
+		spec := portSpec{Port: number}
+		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
+			scheme := strings.ToLower(strings.TrimSpace(parts[1]))
+			spec.Scheme = &scheme
+		}
+		if len(parts) > 2 && strings.TrimSpace(parts[2]) != "" {
 			switch strings.ToLower(strings.TrimSpace(parts[2])) {
 			case "public":
-				port.Public = true
-			case "private", "":
+				public := true
+				spec.Public = &public
+			case "private":
+				private := false
+				spec.Public = &private
 			default:
 				return nil, badPort(raw, "The last part is public or private.")
 			}
 		}
-		ports = append(ports, port)
+		specs = append(specs, spec)
 	}
-	return ports, nil
+	return specs, nil
 }
 
 func badPort(raw, hint string, args ...any) error {

@@ -41,7 +41,7 @@ func envRun(ctx context.Context, req Request) (output.Table, error) {
 			WithStep("run a one-off task", "outplane", "env", "run", "--", "python", "manage.py", "migrate")
 	}
 
-	app, err := envApp(ctx, req)
+	app, err := flagApp(ctx, req, "env", "run")
 	if err != nil {
 		return output.Table{}, err
 	}
