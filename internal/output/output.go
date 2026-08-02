@@ -20,6 +20,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/outplane/cli/internal/clierr"
 	"github.com/outplane/cli/internal/execctx"
@@ -221,8 +222,8 @@ func (w *Writer) text(t Table) error {
 		// one-row table with a dozen columns running off the screen.
 		width := 0
 		for _, c := range t.Columns {
-			if len(c) > width {
-				width = len(c)
+			if n := displayWidth(c); n > width {
+				width = n
 			}
 		}
 		for _, c := range t.Columns {
@@ -234,11 +235,11 @@ func (w *Writer) text(t Table) error {
 
 	widths := make([]int, len(t.Columns))
 	for i, c := range t.Columns {
-		widths[i] = len(t.heading(c))
+		widths[i] = displayWidth(t.heading(c))
 	}
 	for _, row := range t.Rows {
 		for i, c := range t.Columns {
-			if n := len(t.cell(c, row[c])); n > widths[i] {
+			if n := displayWidth(t.cell(c, row[c])); n > widths[i] {
 				widths[i] = n
 			}
 		}
@@ -619,9 +620,22 @@ func (t Table) cell(column string, v any) string {
 	return format(v)
 }
 
+// pad widens a cell to a column width, counting characters rather than bytes.
+//
+// The difference is not academic here: the placeholder for an absent value is
+// an em dash, which is three bytes and one character, so byte-counting shifted
+// every column after the first empty cell. Any non-ASCII value does the same,
+// and this CLI is used in a language full of them.
+//
+// Runes, not grapheme clusters: a wide CJK character still counts as one and
+// will misalign. That is a real limitation and a much rarer one, and fixing it
+// properly needs a table this repository will not carry a dependency for.
 func pad(s string, width int) string {
-	if len(s) >= width {
+	n := width - displayWidth(s)
+	if n <= 0 {
 		return s
 	}
-	return s + strings.Repeat(" ", width-len(s))
+	return s + strings.Repeat(" ", n)
 }
+
+func displayWidth(s string) int { return utf8.RuneCountInString(s) }
