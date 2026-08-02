@@ -389,6 +389,16 @@ func execute(
 	// Before anything else, because the answer decides how every later failure
 	// is rendered. A bad format is reported in text, which is the only thing
 	// that can be trusted when the requested format is the thing that is wrong.
+	// A command may override what a pipe gets, and `env get` does: its whole
+	// purpose is KEY=$(outplane env get KEY), which a JSON object would break.
+	// The override is applied before --output so that an explicit flag still
+	// wins, and it is declared in the registry rather than special-cased here,
+	// because the schema publishes it and an undeclared exception is a silent
+	// contract violation.
+	if decl.Output != nil && decl.Output.Piped == "text" && !exec.StdoutTTY {
+		exec.RequestedFormat = execctx.FormatText
+	}
+
 	if err := applyGlobals(exec, g); err != nil {
 		return finish(output.New(cmd.OutOrStdout(), cmd.ErrOrStderr(), *exec).Error(err), err)
 	}
