@@ -461,6 +461,7 @@ func appCreate() Command {
 			"app.instances_invalid",
 			"app.port_invalid",
 			"app.port_duplicate",
+			"app.repository_unavailable",
 			"usage.bad_port",
 			"usage.bad_assignment",
 			"quota.limit_reached",
@@ -508,6 +509,10 @@ func appCreate() Command {
 			"A private repository is read through the GitHub installation of the user whose " +
 				"token this is. --public-repo skips that, and is the only way to create from a " +
 				"repository the platform has no installation for.",
+			"app.repository_unavailable covers three situations the server does not " +
+				"distinguish: the repository does not exist, the GitHub App is not installed " +
+				"at all, or it is installed without access to this one. The error carries the " +
+				"page that fixes the last two.",
 			"A port is private unless it says public. A private port is reachable by other " +
 				"applications and by a custom domain, and has no platform address.",
 			"Everything the server would refuse is checked first, so an error names the field. " +

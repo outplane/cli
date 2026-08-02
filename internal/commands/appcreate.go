@@ -52,7 +52,7 @@ func appCreate(ctx context.Context, req Request) (output.Table, error) {
 
 	created, err := core.CreateApp(ctx, client, cli.Config.TeamID.Value, spec)
 	if err != nil {
-		return output.Table{}, err
+		return output.Table{}, explainRepositoryAccess(err, spec)
 	}
 
 	cli.Out.Note("Created %s.", spec.Name)
@@ -60,6 +60,33 @@ func appCreate(ctx context.Context, req Request) (output.Table, error) {
 	cli.Out.Note("Watch it with: outplane deploy logs %d", created.DeploymentID)
 
 	return createTable(spec, created, true), nil
+}
+
+// explainRepositoryAccess adds a way forward when the platform cannot see the
+// repository.
+//
+// One server message covers three different situations: the repository does not
+// exist, it exists but the GitHub App was never installed, and it is installed
+// somewhere that does not include this repository. A reader cannot tell which,
+// and the fix for all three is the same page.
+//
+// The match is on the server's own sentence, which is a coupling worth naming.
+// It fails safe: a message this does not recognise is passed through exactly as
+// it arrived, so the worst outcome of the server rewording its error is that
+// two next steps stop appearing.
+func explainRepositoryAccess(err error, spec core.NewApp) error {
+	e := clierr.AsError(err)
+	if e == nil || spec.Repository == "" || !strings.Contains(e.Message, "installations") {
+		return err
+	}
+
+	return e.
+		WithCode("app.repository_unavailable").
+		WithHint("The platform cannot see %s. Either it does not exist, or the Out Plane "+
+			"GitHub App has not been given access to it. A public repository needs no "+
+			"access at all: pass --public-repo.", spec.Repository).
+		WithStep("see which repositories are connected", "outplane", "repos").
+		WithStep("grant access to more of them", core.ConnectURL)
 }
 
 // buildNewApp reads the flags into a specification.
