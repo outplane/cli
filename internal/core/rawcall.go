@@ -79,9 +79,14 @@ func rawPath(path string, query []string) (string, error) {
 			"A path is the part after /api, such as /App/GetAppsByTeamId.")
 	case strings.HasPrefix(strings.ToLower(p), "http://"),
 		strings.HasPrefix(strings.ToLower(p), "https://"):
+		// The address is configurable, by a flag that is deliberately not
+		// documented: it exists for local development and would invite people
+		// to point the CLI at something unsupported. Naming it in an error
+		// would send a reader looking for it in --help, where it is not.
 		return "", usage("give a path, not a full address", "api.path_invalid",
-			"The host comes from the configured API address, so this command cannot "+
-				"be pointed somewhere else. Change --api-url to move it.")
+			"The host comes from the configured API address, and this command "+
+				"cannot be pointed somewhere else. A path looks like "+
+				"/App/GetAppsByTeamId.")
 	}
 
 	// A leading slash is optional, because half the world writes one and the

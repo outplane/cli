@@ -160,7 +160,7 @@ func rawAPI() Command {
 				"--confirm-name here, because this command cannot tell which resource is " +
 				"being changed or what it is called.",
 			"The path is joined to the configured API address and cannot be a full URL, so " +
-				"this command cannot be pointed at another host. --api-url moves it.",
+				"this command cannot be pointed at another host.",
 			"Failures map to the same exit codes as every other command: 3 for a rejected " +
 				"credential, 5 for not found, 7 for a plan limit, 8 for a server failure. " +
 				"The response body of a failure travels in the error's details.",
