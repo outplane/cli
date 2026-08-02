@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/outplane/cli/internal/api"
 	"github.com/outplane/cli/internal/clierr"
 	"github.com/outplane/cli/internal/core"
 	"github.com/outplane/cli/internal/output"
@@ -60,115 +59,22 @@ func appCreate(ctx context.Context, req Request) (output.Table, error) {
 	cli.Out.Note("Deployment %d started. It is not finished.", created.DeploymentID)
 	cli.Out.Note("Watch it with: outplane deploy logs %d", created.DeploymentID)
 
-	attached, err := confirmAttachments(ctx, req, client, spec, created.AppID)
-	if err != nil {
-		return output.Table{}, err
-	}
+	reportSkipped(req, "volume", created.SkippedVolumes)
+	reportSkipped(req, "variable group", created.SkippedEnvGroups)
 
-	table := createTable(spec, created, true)
-	for field, value := range attached {
-		table.Rows[0][field] = value
-	}
-	return table, nil
+	return createTable(spec, created, true), nil
 }
 
-// confirmAttachments reads back what the server actually attached.
+// reportSkipped says what the server could not attach.
 //
-// The server mounts each volume and links each group inside a try/catch and
-// carries on when one fails, so asking for a volume that does not exist, or
-// belongs to another team, or is already attached elsewhere, produces an
-// application without it and no error whatsoever. Reading back turns that
-// silence into a sentence.
-//
-// It costs a request per kind and only when the caller asked for one. The
-// command still succeeds: the application exists, and failing here would
-// suggest retrying something that would then collide on the name.
-func confirmAttachments(
-	ctx context.Context,
-	req Request,
-	client *api.Client,
-	spec core.NewApp,
-	appID string,
-) (map[string]any, error) {
-	fields := map[string]any{}
-
-	if len(spec.Volumes) > 0 {
-		volumes, err := core.AppVolumes(ctx, client, appID)
-		if err != nil {
-			return nil, err
-		}
-		got := make(map[string]bool, len(volumes))
-		for _, v := range volumes {
-			got[v.VolumeID] = true
-		}
-		fields["volumes"] = volumeRows(volumes)
-		fields["volumesRequested"] = len(spec.Volumes)
-		reportMissing(req, "volume", missingIDs(got, mountIDs(spec.Volumes)))
-	}
-
-	if len(spec.EnvGroups) > 0 {
-		groups, err := core.AppEnvGroups(ctx, client, appID)
-		if err != nil {
-			return nil, err
-		}
-		got := make(map[string]bool, len(groups))
-		for _, g := range groups {
-			got[g.GroupID] = true
-		}
-		fields["envGroups"] = groupRows(groups)
-		fields["envGroupsRequested"] = len(spec.EnvGroups)
-		reportMissing(req, "variable group", missingIDs(got, spec.EnvGroups))
-	}
-
-	return fields, nil
-}
-
-// reportMissing says what did not attach, and says it loudly, because the
-// command is about to exit 0.
-func reportMissing(req Request, kind string, missing []string) {
-	for _, id := range missing {
+// The server attaches volumes and variable groups on a best-effort basis and
+// reports which ones it could not, so this is a relay rather than a check: the
+// CLI does not go looking, and does not need to know why one failed.
+func reportSkipped(req Request, kind string, ids []string) {
+	for _, id := range ids {
 		req.CLI.Out.Note("The %s %s was not attached. It may not exist, belong to another "+
 			"team, or already be in use.", kind, id)
 	}
-}
-
-func missingIDs(got map[string]bool, wanted []string) []string {
-	var missing []string
-	for _, id := range wanted {
-		if !got[id] {
-			missing = append(missing, id)
-		}
-	}
-	return missing
-}
-
-func mountIDs(mounts []core.Mount) []string {
-	ids := make([]string, 0, len(mounts))
-	for _, m := range mounts {
-		ids = append(ids, m.VolumeID)
-	}
-	return ids
-}
-
-func volumeRows(volumes []core.Attachment) []map[string]any {
-	rows := make([]map[string]any, 0, len(volumes))
-	for _, v := range volumes {
-		rows = append(rows, map[string]any{
-			"volumeId": v.VolumeID, "name": v.Name,
-			"mountPath": v.MountPath, "sizeGb": v.SizeGB,
-		})
-	}
-	return rows
-}
-
-func groupRows(groups []core.EnvGroup) []map[string]any {
-	rows := make([]map[string]any, 0, len(groups))
-	for _, g := range groups {
-		rows = append(rows, map[string]any{
-			"groupId": g.GroupID, "name": g.Name, "variables": g.Variables,
-		})
-	}
-	return rows
 }
 
 // explainRepositoryAccess adds a way forward when the platform cannot see the
@@ -354,19 +260,21 @@ func createTable(spec core.NewApp, created core.CreatedApp, changed bool) output
 		Columns: []string{"name", "appId", "deploymentId", "source", "size", "instances", "changed"},
 		Total:   1,
 		Rows: []map[string]any{{
-			"name":         spec.Name,
-			"appId":        nilIfEmpty(created.AppID),
-			"deploymentId": nilIfZero(created.DeploymentID),
-			"source":       sourceDescription(spec),
-			"repository":   nilIfEmpty(spec.Repository),
-			"branch":       nilIfEmpty(spec.Branch),
-			"imageRef":     nilIfEmpty(spec.Image),
-			"buildMethod":  buildMethodOf(spec),
-			"size":         spec.InstanceType,
-			"instances":    spec.Instances,
-			"ports":        ports,
-			"envCount":     len(spec.Env),
-			"changed":      changed,
+			"name":             spec.Name,
+			"appId":            nilIfEmpty(created.AppID),
+			"deploymentId":     nilIfZero(created.DeploymentID),
+			"source":           sourceDescription(spec),
+			"repository":       nilIfEmpty(spec.Repository),
+			"branch":           nilIfEmpty(spec.Branch),
+			"imageRef":         nilIfEmpty(spec.Image),
+			"buildMethod":      buildMethodOf(spec),
+			"size":             spec.InstanceType,
+			"instances":        spec.Instances,
+			"ports":            ports,
+			"envCount":         len(spec.Env),
+			"skippedVolumes":   stringsOrNil(created.SkippedVolumes),
+			"skippedEnvGroups": stringsOrNil(created.SkippedEnvGroups),
+			"changed":          changed,
 		}},
 	}
 }
@@ -385,4 +293,14 @@ func buildMethodOf(spec core.NewApp) string {
 		return "prebuilt-image"
 	}
 	return spec.BuildMethod
+}
+
+// stringsOrNil keeps an empty list out of the output, so that "nothing was
+// skipped" reads as null rather than as an empty array a consumer has to
+// distinguish from a missing field.
+func stringsOrNil(values []string) any {
+	if len(values) == 0 {
+		return nil
+	}
+	return values
 }

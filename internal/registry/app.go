@@ -457,23 +457,16 @@ func appCreate() Command {
 			{Name: "ports", Type: "array", Description: "{port, scheme, public}"},
 			{Name: "envCount", Type: "int", Description: "how many variables were set. Values are never returned"},
 			{
-				Name: "volumes",
-				Type: "array",
-				Description: "the volumes actually attached, read back after creation: " +
-					"{volumeId, name, mountPath, sizeGb}. Present only when --volume was given",
+				Name: "skippedVolumes",
+				Type: "array | null",
+				Description: "ids the server could not attach, as it reported them. " +
+					"null when everything attached",
 			},
 			{
-				Name:        "volumesRequested",
-				Type:        "int",
-				Description: "how many were asked for, which may exceed what attached",
+				Name:        "skippedEnvGroups",
+				Type:        "array | null",
+				Description: "the same, for variable groups",
 			},
-			{
-				Name: "envGroups",
-				Type: "array",
-				Description: "the groups actually assigned: {groupId, name, variables}. " +
-					"Present only when --env-group was given",
-			},
-			{Name: "envGroupsRequested", Type: "int"},
 			{Name: "changed", Type: "bool", Description: "false for a dry run"},
 		},
 
@@ -549,11 +542,10 @@ func appCreate() Command {
 				"The exceptions are the plan limit and the name already being taken, which only " +
 				"the server knows.",
 			"Variable values are never echoed back. envCount reports how many were set.",
-			"A volume or a group the server cannot attach does not fail the creation: it " +
-				"attaches what it can and says nothing about the rest. The CLI reads back what " +
-				"actually attached, warns about each one that did not, and reports both counts. " +
-				"Compare volumes against volumesRequested rather than assuming exit 0 means all " +
-				"of them.",
+			"A volume or a group the server cannot attach does not fail the creation, because " +
+				"the application already exists by then. The server names what it skipped and " +
+				"the CLI relays it: check skippedVolumes and skippedEnvGroups rather than " +
+				"reading exit 0 as everything attached.",
 		},
 
 		Related: []string{"app list", "app get", "deploy create", "env set", "app delete"},
