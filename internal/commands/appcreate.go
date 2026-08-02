@@ -67,7 +67,7 @@ func buildNewApp(req Request) (core.NewApp, error) {
 	if len(req.Args) == 0 {
 		return core.NewApp{}, clierr.New(clierr.KindUsage, "no name given").
 			WithCode("usage.missing_argument").
-			WithHint("The name appears in the application's public address and cannot be changed. " +
+			WithHint("The name appears in the application's public address and cannot be changed. "+
 				"The display name can.").
 			WithStep("create from a repository", "outplane", "app", "create", "<NAME>",
 				"--repo", "<OWNER>/<REPO>", "--branch", "main", "--port", "3000").
