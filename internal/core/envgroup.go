@@ -45,6 +45,13 @@ type EnvGroup struct {
 	// Entries are the variables themselves. Only the detail endpoint fills
 	// them in, and commands decide whether to show the values.
 	Entries []EnvVar `json:"entries"`
+
+	// AssignedApps are the applications using the group, which only the detail
+	// endpoint carries. They matter more here than a count would: nothing
+	// deploys these applications automatically, so knowing which ones they are
+	// is what turns "the change takes effect at the next deployment" into a
+	// list of deployments somebody can actually run.
+	AssignedApps []EnvGroupAssignment `json:"assignedApps"`
 }
 
 type envGroupDTO struct {
@@ -56,7 +63,8 @@ type envGroupDTO struct {
 	VariableCount   int    `json:"variableCount"`
 	AssignmentCount int    `json:"assignmentCount"`
 
-	Entries []envVarDTO `json:"entries"`
+	Entries     []envVarDTO     `json:"entries"`
+	Assignments []assignmentDTO `json:"assignments"`
 }
 
 // EnvGroupAssignment is one group attached to one application.
@@ -111,6 +119,12 @@ func decodeEnvGroup(d envGroupDTO) EnvGroup {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Key < entries[j].Key })
 
+	assigned := make([]EnvGroupAssignment, 0, len(d.Assignments))
+	for _, a := range d.Assignments {
+		assigned = append(assigned, decodeAssignment(a))
+	}
+	sort.Slice(assigned, func(i, j int) bool { return assigned[i].AppName < assigned[j].AppName })
+
 	return EnvGroup{
 		ID:           d.ID,
 		Name:         d.Name,
@@ -120,6 +134,18 @@ func decodeEnvGroup(d envGroupDTO) EnvGroup {
 		Variables:    d.VariableCount,
 		Assignments:  d.AssignmentCount,
 		Entries:      entries,
+		AssignedApps: assigned,
+	}
+}
+
+func decodeAssignment(d assignmentDTO) EnvGroupAssignment {
+	return EnvGroupAssignment{
+		ID:        d.AssignmentID,
+		GroupID:   d.EnvVariableGroupID,
+		GroupName: d.EnvVariableGroupName,
+		AppID:     d.AppID,
+		AppName:   d.AppName,
+		Variables: d.VariableCount,
 	}
 }
 
@@ -152,7 +178,10 @@ func SaveEnvGroup(ctx context.Context, c *api.Client, groupID string, g EnvGroup
 	return decodeEnvGroup(dto), nil
 }
 
-// DeleteEnvGroup removes a group and every assignment of it.
+// DeleteEnvGroup removes a group.
+//
+// The server refuses while any application still uses it, so this is the one
+// deletion on the platform that has to be unassigned first.
 func DeleteEnvGroup(ctx context.Context, c *api.Client, groupID string) error {
 	return c.Delete(ctx, "/EnvVariableGroup/Delete/"+groupID, nil)
 }
@@ -180,14 +209,7 @@ func AppEnvGroups(ctx context.Context, c *api.Client, appID string) ([]EnvGroupA
 
 	out := make([]EnvGroupAssignment, 0, len(dtos))
 	for _, d := range dtos {
-		out = append(out, EnvGroupAssignment{
-			ID:        d.AssignmentID,
-			GroupID:   d.EnvVariableGroupID,
-			GroupName: d.EnvVariableGroupName,
-			AppID:     d.AppID,
-			AppName:   d.AppName,
-			Variables: d.VariableCount,
-		})
+		out = append(out, decodeAssignment(d))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].GroupName < out[j].GroupName })
 	return out, nil

@@ -187,7 +187,7 @@ func envSet(ctx context.Context, req Request) (output.Table, error) {
 	}
 	req.CLI.Out.Note("Set %s on %s.", strings.Join(keys, ", "), app.Name)
 
-	id, err := applyEnvChange(ctx, req, client, app)
+	id, err := applyChange(ctx, req, client, app, "values")
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -256,30 +256,33 @@ func envUnset(ctx context.Context, req Request) (output.Table, error) {
 	}
 	req.CLI.Out.Note("Removed %s from %s.", strings.Join(keys, ", "), app.Name)
 
-	id, err := applyEnvChange(ctx, req, client, app)
+	id, err := applyChange(ctx, req, client, app, "values")
 	if err != nil {
 		return output.Table{}, err
 	}
 	return envChangeTable(app, keys, "unset", true, id), nil
 }
 
-// applyEnvChange deploys when asked, and says what happens if it is not.
+// applyChange deploys when asked, and says what happens if it is not.
 //
-// A variable that was saved and changed nothing is the failure this exists to
+// A change that was saved and did nothing is the failure this exists to
 // prevent. The platform refreshes a running workload when it is scaled or
-// paused and not when its variables change, so without a deployment the app
-// goes on running with the values it started with.
-func applyEnvChange(ctx context.Context, req Request, client *api.Client, app core.App) (int, error) {
+// paused and at no other time, so a variable, a group or a mount only reaches
+// the process at the next deployment.
+//
+// Every command with that property offers --deploy and shares this, so the
+// affordance and the wording cannot drift between them.
+func applyChange(ctx context.Context, req Request, client *api.Client, app core.App, what string) (int, error) {
 	if !req.Flags.Bool("deploy") {
-		req.CLI.Out.Note("The running app still has the old values. Deploy to apply them:")
+		req.CLI.Out.Note("The running app still has the old %s. Deploy to apply the change:", what)
 		req.CLI.Out.Note("  outplane deploy create %s", app.Name)
 		return 0, nil
 	}
 
 	id, err := core.CreateDeployment(ctx, client, app.ID, "")
 	if err != nil {
-		// The variables are already saved, so this is not a failed change. Say
-		// so plainly rather than returning an error that reads as one.
+		// The change is already saved, so this is not a failed change. Say so
+		// plainly rather than returning an error that reads as one.
 		req.CLI.Out.Note("The change is saved, but the deployment could not be started: %v", err)
 		req.CLI.Out.Note("Start it with: outplane deploy create %s", app.Name)
 		return 0, nil

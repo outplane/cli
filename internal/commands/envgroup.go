@@ -67,6 +67,14 @@ func envGroupGet(ctx context.Context, req Request) (output.Table, error) {
 		return output.Table{}, err
 	}
 
+	// The applications are the answer to "what do I deploy now", which nothing
+	// else reports and which the group's own commands deliberately do not do
+	// for the reader: a group can have dozens of users and deploying them all
+	// from here would be a bigger action than the one they asked for.
+	if req.Flags.Bool("apps") {
+		return assignedAppsTable(group), nil
+	}
+
 	reveal := req.Flags.Bool("reveal")
 
 	table := output.Table{
@@ -90,10 +98,33 @@ func envGroupGet(ctx context.Context, req Request) (output.Table, error) {
 	return table, nil
 }
 
+// assignedAppsTable lists the applications using a group.
+func assignedAppsTable(g core.EnvGroup) output.Table {
+	table := output.Table{
+		Columns: []string{"app", "appId"},
+		Total:   len(g.AssignedApps),
+	}
+	for _, a := range g.AssignedApps {
+		table.Rows = append(table.Rows, map[string]any{
+			"app":          a.AppName,
+			"appId":        a.AppID,
+			"assignmentId": a.ID,
+		})
+	}
+	if len(g.AssignedApps) > 0 {
+		table.Footer = "Each of these picks up a change to " + g.Name +
+			" at its next deployment. Nothing deploys them for you."
+	}
+	return table
+}
+
 // groupSummary is the sentence that says what the table of variables belongs
 // to, since the rows themselves carry no group.
 func groupSummary(g core.EnvGroup, reveal bool) string {
 	summary := g.Name + " is used " + scopeOf(g) + ", by " + plural(g.Assignments, "application") + "."
+	if names := appNamesOf(g); names != "" {
+		summary = g.Name + " is used " + scopeOf(g) + ", by " + names + "."
+	}
 	if g.Description != "" {
 		summary = g.Description + ". " + summary
 	}
@@ -283,7 +314,8 @@ func envGroupDelete(ctx context.Context, req Request) (output.Table, error) {
 	if req.CLI.DryRun {
 		req.CLI.Out.Note("%s and its %s would be destroyed.", group.Name, plural(group.Variables, "variable"))
 		if group.Assignments > 0 {
-			req.CLI.Out.Note("%s would lose them at the next deployment.",
+			// Phrased around the count rather than agreeing with it, as elsewhere.
+			req.CLI.Out.Note("The platform will refuse: it is still used by %s. Unassign it first.",
 				plural(group.Assignments, "application"))
 		}
 		return groupSingle(group, false), nil
@@ -311,8 +343,8 @@ func checkGroupConfirmed(req Request, group core.EnvGroup) error {
 
 	if !req.Flags.Bool("yes") || req.Flags.String("confirm-name") == "" {
 		return groupConfirmation(group,
-			"Deleting %s removes its variables from %s. Both --yes and --confirm-name "+
-				"are required.", group.Name, plural(group.Assignments, "application"))
+			"Deleting %s destroys its %s, and nothing restores them. Both --yes and "+
+				"--confirm-name are required.", group.Name, plural(group.Variables, "variable"))
 	}
 
 	if given := req.Flags.String("confirm-name"); given != group.Name {
@@ -513,6 +545,20 @@ func scopeOrTextChanged(req Request) bool {
 		req.Flags.Bool("build-only") || req.Flags.Bool("runtime")
 }
 
+// appNamesOf lists the applications when there are few enough to read, and
+// says nothing when there are not: twenty names in a closing line is a wall,
+// and `--apps` is the command for that.
+func appNamesOf(g core.EnvGroup) string {
+	if len(g.AssignedApps) == 0 || len(g.AssignedApps) > 5 {
+		return ""
+	}
+	names := make([]string, 0, len(g.AssignedApps))
+	for _, a := range g.AssignedApps {
+		names = append(names, a.AppName)
+	}
+	return strings.Join(names, ", ")
+}
+
 func scopeOf(g core.EnvGroup) string {
 	switch {
 	case g.UseInBuild && g.UseInRuntime:
@@ -553,6 +599,12 @@ func groupSingle(g core.EnvGroup, changed bool) output.Table {
 	}
 }
 
+// assignmentTable deliberately reports no deployment.
+//
+// A group is shared, and the commands over it do not deploy: assigning is one
+// application but the group's other users are one command away, and a CLI that
+// deploys some of them and not others is worse than one that deploys none. The
+// reader is told when the change takes effect and left to decide what to deploy.
 func assignmentTable(g core.EnvGroup, app string, changed bool) output.Table {
 	return output.Table{
 		Single:  true,

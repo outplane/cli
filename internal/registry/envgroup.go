@@ -132,13 +132,20 @@ func envGroupGet() Command {
 				Name: "reveal", Type: "bool", Default: "false",
 				Description: "print the values instead of hiding them",
 			},
+			{
+				Name: "apps", Type: "bool", Default: "false",
+				Description: "list the applications using the group instead of its variables",
+			},
 		},
 
 		OutputFields: []Field{
-			{Name: "key", Type: "string"},
+			{Name: "key", Type: "string", Description: "without --apps"},
 			{Name: "value", Type: "string", Description: "masked unless --reveal was given"},
 			{Name: "revealed", Type: "bool"},
 			{Name: "length", Type: "int", Description: "accurate whether or not the value is shown"},
+			{Name: "app", Type: "string", Description: "with --apps: an application using the group"},
+			{Name: "appId", Type: "string", Description: "with --apps"},
+			{Name: "assignmentId", Type: "string", Description: "with --apps: the record that joins them"},
 		},
 
 		ErrorCodes: []string{"envgroup.not_found", "envgroup.ambiguous", "usage.missing_argument"},
@@ -152,6 +159,21 @@ func envGroupGet() Command {
 				Placeholders: map[string]string{"shared": "<GROUP_NAME>"},
 				Risk:         RiskRead,
 			},
+			{
+				Title:        "which applications use it, and therefore what to deploy",
+				Command:      "outplane env group get shared --apps",
+				Argv:         []string{"outplane", "env", "group", "get", "shared", "--apps"},
+				Placeholders: map[string]string{"shared": "<GROUP_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{
+					"items": []any{
+						map[string]any{"app": "checkout", "appId": "618ac10a-…"},
+						map[string]any{"app": "worker", "appId": "c0345de8-…"},
+					},
+					"total":     2,
+					"truncated": false,
+				},
+			},
 		},
 
 		AutomationNotes: []string{
@@ -160,6 +182,9 @@ func envGroupGet() Command {
 				"key and value has nowhere to put them.",
 			"Resolving a name costs a list call before the read, since the detail endpoint " +
 				"takes an id.",
+			"--apps answers the question the other commands leave open: a change to a group " +
+				"reaches its applications at their next deployment, and nothing here deploys " +
+				"them, so this is the list to work through.",
 		},
 
 		Related: []string{"env group list", "env group set", "env get"},
@@ -397,9 +422,10 @@ func envGroupDelete() Command {
 	return Command{
 		Path:  []string{"env", "group", "delete"},
 		Short: "permanently delete a variable group",
-		Long: "Deletes a group and every assignment of it.\n\n" +
-			"The variables go with it, and each application using the group loses them at " +
-			"its next deployment. Nothing restores them.",
+		Long: "Deletes a group.\n\n" +
+			"The platform refuses while any application still uses it, so unassign it " +
+			"everywhere first. `env group get <name> --apps` lists who they are.\n\n" +
+			"The variables are destroyed with the group and nothing restores them.",
 
 		Risk:           RiskDestructive,
 		RequiresAuth:   true,
@@ -425,6 +451,7 @@ func envGroupDelete() Command {
 			"confirmation.required",
 			"envgroup.confirm_name_mismatch",
 			"envgroup.not_found",
+			"envgroup.in_use",
 		},
 		ExitCodes: []int{0, 2, 3, 4, 5, 8},
 
@@ -449,8 +476,8 @@ func envGroupDelete() Command {
 			"Never prompts. Without confirmation it exits 4 and returns the command to " +
 				"replay in the error's confirm_command field.",
 			"Under a detected agent harness it exits 4 even with both flags.",
-			"Every assignment goes with the group. --dry-run reports how many applications " +
-				"that is before anything is asked.",
+			"A group with assignments cannot be deleted: the server refuses and says so. " +
+				"Unassign it from every application first, which `env group get --apps` lists.",
 		},
 
 		Related: []string{"env group unassign", "env group list"},

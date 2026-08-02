@@ -170,7 +170,10 @@ func volumeAttach(ctx context.Context, req Request) (output.Table, error) {
 	}
 
 	req.CLI.Out.Note("Attached %s to %s at %s.", updated.Name, appName, updated.MountPath)
-	req.CLI.Out.Note("The application picks it up on its next deployment.")
+
+	if _, err := applyChange(ctx, req, client, core.App{ID: appID, Name: appName}, "mounts"); err != nil {
+		return output.Table{}, err
+	}
 	return volumeSingle(updated, true), nil
 }
 
@@ -206,6 +209,12 @@ func volumeDetach(ctx context.Context, req Request) (output.Table, error) {
 	}
 
 	req.CLI.Out.Note("Detached %s from %s. The disk and its contents are kept.", volume.Name, volume.App)
+
+	if volume.AppID != "" {
+		if _, err := applyChange(ctx, req, client, core.App{ID: volume.AppID, Name: volume.App}, "mounts"); err != nil {
+			return output.Table{}, err
+		}
+	}
 	return volumeSingle(updated, true), nil
 }
 
