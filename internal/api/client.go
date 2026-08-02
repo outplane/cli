@@ -347,9 +347,9 @@ func toHostError(status int, env envelope, reqID string, host string) *clierr.Er
 		// A Hobby team over its plan limit.
 		return clierr.New(clierr.KindQuota, "%s", fallback(apiMessage, "plan limit reached")).
 			WithCode("quota.upgrade_required").
-			WithHint("This team is on the Hobby plan and has reached its limit.").
-			WithStep("open billing to upgrade", "outplane", "billing", "portal").
-			WithStep("see current usage against limits", "outplane", "billing", "quota").
+			WithHint("This team is on the Hobby plan and has reached its limit. Plans are "+
+				"changed in the console; the CLI has no billing commands.").
+			WithStep("see what this team is using", "outplane", "app", "list").
 			WithRequestID(reqID)
 
 	case status == http.StatusTooManyRequests:
@@ -357,8 +357,9 @@ func toHostError(status int, env envelope, reqID string, host string) *clierr.Er
 		// rate limiter. Retrying will never succeed, so Retryable stays false.
 		return clierr.New(clierr.KindQuota, "%s", fallback(apiMessage, "plan limit reached")).
 			WithCode("quota.limit_reached").
-			WithHint("This is a plan limit, not rate limiting. Retrying will not help.").
-			WithStep("see current usage against limits", "outplane", "billing", "quota").
+			WithHint("This is a plan limit, not rate limiting. Retrying will not help. "+
+				"Limits are raised in the console; the CLI has no billing commands.").
+			WithStep("see what this team is using", "outplane", "app", "list").
 			WithRequestID(reqID)
 
 	case status >= 500:
@@ -393,7 +394,7 @@ func transportError(err error, host string) *clierr.Error {
 	case strings.Contains(msg, "no such host"), strings.Contains(msg, "connection refused"):
 		return clierr.New(clierr.KindUpstream, "could not reach %s", host).
 			WithHint("Check your network connection, or the address configured for it.").
-			WithStep("see the resolved configuration", "outplane", "config", "list")
+			WithStep("see the resolved configuration", "outplane", "status")
 	default:
 		return clierr.New(clierr.KindUpstream, "request failed: %v", err)
 	}
