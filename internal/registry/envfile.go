@@ -87,6 +87,7 @@ func envPull() Command {
 
 		ErrorCodes: []string{
 			"env.file_exists",
+			"env.file_unwritable",
 			"env.file_unreadable",
 			"env.file_invalid",
 			"context.no_app",
@@ -215,7 +216,6 @@ func envPush() Command {
 		ErrorCodes: []string{
 			"env.file_not_found",
 			"env.file_invalid",
-			"env.file_empty",
 			"env.file_unreadable",
 			"env.reserved_key",
 			"env.reserved_prefix",
@@ -270,7 +270,9 @@ func envPush() Command {
 				"the file is left alone; nothing here removes anything. `outplane env unset` " +
 				"removes, by name.",
 			"Only keys that are new or whose value differs are sent. sent is false when " +
-				"every key already matched, and that is a success, not a failure.",
+				"every key already matched, and that is a success, not a failure. A file " +
+				"with no variables in it is the same case: nothing is sent, nothing is " +
+				"removed, and the exit code is 0.",
 			"Keys are compared the way the server compares them, ignoring case, so a file " +
 				"with `path=` changes an existing PATH rather than adding a second variable.",
 			"Saving does not restart anything. Without --deploy the running application " +

@@ -84,7 +84,9 @@ func envPull(ctx context.Context, req Request) (output.Table, error) {
 	}
 
 	req.CLI.Out.Note("Wrote %d variables from %s to %s.", len(vars), app.Name, path)
-	req.CLI.Out.Note("It holds real values. Keep it out of version control.")
+	if len(vars) > 0 {
+		req.CLI.Out.Note("It holds real values. Keep it out of version control.")
+	}
 	noteGroups(ctx, req, client, app)
 
 	return envFileTable("pull", path, app, keys, 0, true), nil
@@ -121,9 +123,23 @@ func envPush(ctx context.Context, req Request) (output.Table, error) {
 
 	values, added, changed, unchanged := diffEnv(entries, current)
 
+	// Nothing to send is a success, not a failure, and it is the ordinary result
+	// of running this twice. A file with nothing in it lands here too: pushing
+	// removes nothing, so an empty file asks for nothing and gets it. Refusing
+	// it would mean `env pull` on an application with no variables writes a file
+	// its own sibling will not read.
 	if len(values) == 0 {
-		req.CLI.Out.Note("%s already has every variable in %s, with the same values.",
-			app.Name, path)
+		if len(entries) == 0 {
+			req.CLI.Out.Note("%s sets no variables, so there was nothing to send.", path)
+		} else {
+			req.CLI.Out.Note("%s already has every variable in %s, with the same values.",
+				app.Name, path)
+		}
+		// The flag was given and did nothing, which is worth a sentence: a
+		// deployment nobody asked about is worse than a deployment explained.
+		if req.Flags.Bool("deploy") {
+			req.CLI.Out.Note("Nothing changed, so --deploy started no deployment.")
+		}
 		return envPushTable(path, app, added, changed, unchanged, false, 0), nil
 	}
 
@@ -224,11 +240,6 @@ func readEnvFile(path string) ([]envfile.Var, error) {
 			WithCode("env.file_invalid")
 	}
 
-	if len(entries) == 0 {
-		return nil, clierr.New(clierr.KindUsage, "%s sets no variables", path).
-			WithCode("env.file_empty").
-			WithHint("Every line in it is blank or a comment.")
-	}
 	if len(entries) > core.MaxEnvVars {
 		return nil, clierr.New(clierr.KindUsage,
 			"%s holds %d variables, and the limit is %d", path, len(entries), core.MaxEnvVars).
@@ -275,7 +286,7 @@ func checkOverwrite(req Request, path string) error {
 		return nil
 	}
 	if err != nil {
-		return openError(path, err)
+		return writeError(path, err)
 	}
 	if info.IsDir() {
 		return clierr.New(clierr.KindUsage, "%s is a directory", path).
@@ -305,27 +316,27 @@ func writePrivately(path string, entries []envfile.Var, appName string) error {
 	dir := filepath.Dir(path)
 	temp, err := os.CreateTemp(dir, ".env-*")
 	if err != nil {
-		return openError(path, err)
+		return writeError(path, err)
 	}
 	tempName := temp.Name()
 	defer os.Remove(tempName) // no-op once the rename has succeeded
 
 	if err := temp.Chmod(0o600); err != nil {
 		temp.Close()
-		return openError(path, err)
+		return writeError(path, err)
 	}
 
 	header := fmt.Sprintf("Written by `outplane env pull` from %s.\n"+
 		"These are real values. Do not commit this file.", appName)
 	if err := envfile.Format(temp, entries, header); err != nil {
 		temp.Close()
-		return openError(path, err)
+		return writeError(path, err)
 	}
 	if err := temp.Close(); err != nil {
-		return openError(path, err)
+		return writeError(path, err)
 	}
 	if err := os.Rename(tempName, path); err != nil {
-		return openError(path, err)
+		return writeError(path, err)
 	}
 	return nil
 }
@@ -345,6 +356,27 @@ func openError(path string, err error) error {
 	default:
 		return clierr.New(clierr.KindInternal, "%s could not be used: %v", path, err).
 			WithCode("env.file_unreadable")
+	}
+}
+
+// writeError explains a file that could not be written.
+//
+// Reading and writing fail for different reasons, and openError's wording is
+// about reading: "cannot be read" is the wrong sentence for a path this command
+// was trying to create, and "there is no file" is exactly backwards when the
+// thing that does not exist is the directory to put one in.
+func writeError(path string, err error) error {
+	switch {
+	case os.IsNotExist(err):
+		return clierr.New(clierr.KindNotFound, "there is no directory at %s", filepath.Dir(path)).
+			WithCode("env.file_unwritable").
+			WithHint("The file would go there, so it has to exist first.")
+	case os.IsPermission(err):
+		return clierr.New(clierr.KindUsage, "%s cannot be written by this user", path).
+			WithCode("env.file_unwritable")
+	default:
+		return clierr.New(clierr.KindInternal, "%s could not be written: %v", path, err).
+			WithCode("env.file_unwritable")
 	}
 }
 

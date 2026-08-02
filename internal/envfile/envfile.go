@@ -19,6 +19,14 @@
 //     fit on one is the other way people write it.
 //   - A key that appears twice is an error rather than a last-one-wins, since
 //     the two lines disagree and only the author knows which was meant.
+//   - Text after a closing quote is an error, except a comment. The value has
+//     already ended, so keeping the part before the quote would be a guess
+//     about which half of the line was meant.
+//   - A byte order mark on the first line is dropped. Several editors write
+//     one and none of them mention it, and a key that begins with an invisible
+//     character matches nothing anywhere.
+//   - Carriage returns are dropped with the line ending, so a file written on
+//     Windows reads the same as one written anywhere else.
 //
 // Nothing here talks to the network or the filesystem. It turns text into
 // variables and variables into text, which is what makes both directions
@@ -77,6 +85,13 @@ func Parse(r io.Reader) ([]Var, error) {
 	for scanner.Scan() {
 		line++
 		text := scanner.Text()
+		if line == 1 {
+			// A byte order mark, which several editors write and none of them
+			// mention. Left in place it becomes part of the first key, and the
+			// variable that results is invisible in every listing and matches
+			// nothing, because the character it differs by cannot be seen.
+			text = strings.TrimPrefix(text, "\ufeff")
+		}
 
 		trimmed := strings.TrimLeftFunc(text, unicode.IsSpace)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -132,6 +147,14 @@ func readValue(rest string, scanner *bufio.Scanner, line *int) (string, *ParseEr
 	body := rest[1:]
 	for {
 		if end, ok := closingQuote(body, quote); ok {
+			// What follows the closing quote is either nothing, or a comment.
+			// Anything else means the line does not say what it looks like it
+			// says, and returning the part before the quote would be this
+			// parser choosing which half of somebody's value to keep.
+			if after := strings.TrimSpace(body[end+1:]); after != "" && !strings.HasPrefix(after, "#") {
+				return "", &ParseError{Reason: fmt.Sprintf(
+					"the value ends at the closing %c and there is more text after it", quote)}
+			}
 			return unescape(body[:end], quote), nil
 		}
 		if !scanner.Scan() {

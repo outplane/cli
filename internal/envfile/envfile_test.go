@@ -68,6 +68,31 @@ func TestParse(t *testing.T) {
 			in:   "EMPTY=\n",
 			want: []Var{{Key: "EMPTY", Value: ""}},
 		},
+		{
+			name: "carriage returns from a file written on Windows",
+			in:   "FOO=bar\r\nBAZ=\"qux\"\r\n",
+			want: []Var{{Key: "FOO", Value: "bar"}, {Key: "BAZ", Value: "qux"}},
+		},
+		{
+			name: "a byte order mark is not part of the first key",
+			in:   "\ufeffFOO=bar\n",
+			want: []Var{{Key: "FOO", Value: "bar"}},
+		},
+		{
+			name: "a comment may follow a quoted value",
+			in:   "FOO=\"bar\"  # why\n",
+			want: []Var{{Key: "FOO", Value: "bar"}},
+		},
+		{
+			name: "space around the equals is not part of either side",
+			in:   "  FOO = bar \n",
+			want: []Var{{Key: "FOO", Value: "bar"}},
+		},
+		{
+			name: "the last line needs no newline",
+			in:   "FOO=bar",
+			want: []Var{{Key: "FOO", Value: "bar"}},
+		},
 	}
 
 	for _, c := range cases {
@@ -96,6 +121,7 @@ func TestParseRejects(t *testing.T) {
 		"unclosed quote":               "FOO=\"bar\n",
 		"the same key twice":           "FOO=a\nFOO=b\n",
 		"the same key in another case": "foo=a\nFOO=b\n",
+		"text after a closing quote":   "FOO=\"bar\" and more\n",
 	}
 
 	for name, in := range cases {
