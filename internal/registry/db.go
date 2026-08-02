@@ -231,13 +231,6 @@ func dbURL() Command {
 				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
 				Risk:         RiskRead,
 			},
-			{
-				Title:        "give it to an application",
-				Command:      "outplane env set DATABASE_URL=\"$(outplane db url orders)\" --app checkout --deploy",
-				Argv:         []string{"outplane", "env", "set", "DATABASE_URL=<URL>", "--app", "checkout", "--deploy"},
-				Placeholders: map[string]string{"orders": "<DATABASE_NAME>", "checkout": "<APP_NAME>"},
-				Risk:         RiskWrite,
-			},
 		},
 
 		AutomationNotes: []string{
@@ -248,6 +241,9 @@ func dbURL() Command {
 				"With a choice the command refuses and lists them rather than picking.",
 			"The string is a credential and is never masked here: asking for it is the " +
 				"request to see it. It does not appear in any other command's output.",
+			"Because the piped default is text, a failure is a sentence on stderr rather than a JSON envelope on stdout, and stdout stays empty. That is what keeps command substitution from capturing an error message. Pass --json when the envelope is wanted.",
+			"To hand it to an application, capture it and pass it to `outplane env set`, " +
+				"which takes a KEY=VALUE pair and can deploy afterwards.",
 		},
 
 		Related: []string{"db get", "env set"},

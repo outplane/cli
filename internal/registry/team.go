@@ -156,17 +156,13 @@ func teamUse() Command {
 				Placeholders: map[string]string{"acme": "<TEAM_SLUG>"},
 				Risk:         RiskWrite,
 			},
-			{
-				Title:   "act on one team once, without switching",
-				Command: "outplane app list --team beta",
-				Argv:    []string{"outplane", "app", "list", "--team", "beta"},
-				Risk:    RiskRead,
-			},
 		},
 
 		AutomationNotes: []string{
 			"This writes a preference to this machine's config. In CI, do not use it: set " +
 				"OUTPLANE_TOKEN, which names its own team, or pass --team per command.",
+			"To act on another team once without switching, pass --team to that command " +
+				"instead of running this one.",
 			"Selecting a team the CLI holds no credential for fails. Signing in is what adds " +
 				"one, and the team is chosen in the console while doing so.",
 			"An effective value of false means the choice was saved but something outranks it " +

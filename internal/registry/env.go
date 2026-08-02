@@ -182,6 +182,7 @@ func envGet() Command {
 			"Text is the default even in a pipe, unlike every other command. stdout carries " +
 				"the raw value and a newline and nothing else, so KEY=$(outplane env get KEY) " +
 				"works in a script. Pass --json to get an object instead.",
+			"Because the piped default is text, a failure is a sentence on stderr rather than a JSON envelope on stdout, and stdout stays empty. That is what keeps command substitution from capturing an error message. Pass --json when the envelope is wanted.",
 			"A missing variable is exit 5 with env.not_found and the available keys in the " +
 				"error's details, so a caller never has to list separately to find out what " +
 				"it should have asked for.",
@@ -278,6 +279,15 @@ func envSet() Command {
 				Command: "outplane env set LOG_LEVEL=debug --dry-run",
 				Argv:    []string{"outplane", "env", "set", "LOG_LEVEL=debug", "--dry-run"},
 				Risk:    RiskRead,
+			},
+			{
+				Title: "give an application a managed database's connection string",
+				Command: "outplane env set DATABASE_URL=\"$(outplane db url orders)\" " +
+					"--app checkout --deploy",
+				Argv: []string{"outplane", "env", "set", "DATABASE_URL=<CONNECTION_STRING>",
+					"--app", "checkout", "--deploy"},
+				Placeholders: map[string]string{"checkout": "<APP_NAME>", "orders": "<DATABASE_NAME>"},
+				Risk:         RiskWrite,
 			},
 		},
 
