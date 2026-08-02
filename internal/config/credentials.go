@@ -5,18 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 )
 
-// credentials.json holds tokens, and only tokens.
+// The credential document holds tokens, and only tokens.
 //
 // Keeping them out of config.json means a user can share their configuration,
 // paste it into an issue, or sync it in a dotfiles repository without leaking a
-// credential. It also lets the two files carry different permissions.
+// credential. Where the document itself is kept is store.go's decision: the OS
+// keychain when there is one, a file with owner-only permissions when there is
+// not.
 //
 // ── Why this file is keyed by team ──────────────────────────────────────
 //
@@ -31,9 +32,10 @@ import (
 // which one is active. Modelling that here, rather than pretending one
 // credential covers everything, is what keeps the rest of the CLI honest.
 //
-// A future step adds the OS keychain as the preferred store with this file as
-// the fallback. The fallback is not a nicety: containers and headless Linux
-// cannot reach a keychain, and CI is exactly that case.
+// Nothing in this file knows where the document lives. It reads and writes one
+// JSON object through store.go, which decides between the keychain and a file,
+// and OUTPLANE_TOKEN bypasses both because a token given for one command should
+// not be written down at all.
 
 type credentialFile struct {
 	Version int `json:"version"`
@@ -122,24 +124,28 @@ func credentialsPath() (string, error) {
 	return filepath.Join(dir, "credentials.json"), nil
 }
 
-// loadCredentials reads the store, returning an empty one when absent.
+// loadCredentials reads the document, returning an empty one when there is
+// none.
 //
-// A missing or unreadable file is not an error: plenty of commands need no
-// credential, and `outplane schema` in particular must work on a machine that
-// has never been logged in.
+// Nothing stored is not an error: plenty of commands need no credential, and
+// `outplane schema` in particular must work on a machine that has never been
+// logged in. Neither is a document that cannot be parsed; it is treated as
+// absent, because the alternative is a CLI that cannot even be signed in to
+// again.
 func loadCredentials() credentialFile {
-	f := credentialFile{Version: 1, Teams: map[string]Credential{}}
+	empty := credentialFile{Version: 1, Teams: map[string]Credential{}}
 
-	path, err := credentialsPath()
-	if err != nil {
-		return f
+	target := credentialStore()
+	migrateFileToKeychain(target)
+
+	raw, err := target.load()
+	if err != nil || len(raw) == 0 {
+		return empty
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return f
-	}
+
+	var f credentialFile
 	if err := json.Unmarshal(raw, &f); err != nil {
-		return credentialFile{Version: 1, Teams: map[string]Credential{}}
+		return empty
 	}
 	if f.Teams == nil {
 		f.Teams = map[string]Credential{}
@@ -148,18 +154,11 @@ func loadCredentials() credentialFile {
 }
 
 func saveCredentials(f credentialFile) error {
-	path, err := credentialsPath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
 	raw, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, append(raw, '\n'), 0o600)
+	return credentialStore().save(raw)
 }
 
 // SignedInTeams lists every team the CLI holds a credential for, sorted by
@@ -260,6 +259,14 @@ func ForgetCredential(slug string) error {
 				}
 			}
 		}
+	}
+
+	// Signing out of everything removes the document rather than storing an
+	// empty one. A keychain entry that exists and holds nothing still shows up
+	// in Keychain Access, and a file that exists still looks like a credential
+	// to anybody reading the directory.
+	if len(f.Teams) == 0 {
+		return credentialStore().clear()
 	}
 	return saveCredentials(f)
 }

@@ -32,7 +32,11 @@ func login() Command {
 			"again to sign in to a second team; existing credentials are kept, and " +
 			"`outplane team use` switches between them.\n\n" +
 			"Makes no network request. The token names its own team, so the only thing " +
-			"signing in does is file it.",
+			"signing in does is store it.\n\n" +
+			"It goes into this machine's keychain. Where there is none, which is every " +
+			"container and most headless servers, it goes into a file readable only by " +
+			"its owner and `outplane status` says so. In CI, set OUTPLANE_TOKEN instead " +
+			"and nothing is written down at all.",
 
 		Risk: RiskWrite,
 		// The whole point of this command is to obtain a credential, so it

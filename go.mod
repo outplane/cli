@@ -21,11 +21,15 @@ go 1.25.0
 //                                   are ours to get wrong exactly once
 //   golang.org/x/term               raw mode and terminal size for `app shell`
 //   github.com/pkg/browser          opens the console for browser login
+//   github.com/zalando/go-keyring   the OS keychain, where tokens belong.
+//                                   Pure Go, so CGO_ENABLED=0 survives; its
+//                                   own dependencies are the Windows and
+//                                   D-Bus clients, both build-tagged to one
+//                                   platform each
 //
 // Planned, as the code that needs them lands:
 //
 //   github.com/itchyny/gojq         embedded --jq, so users need no jq binary
-//   github.com/zalando/go-keyring   OS keychain. Pure Go: keeps CGO_ENABLED=0
 //   github.com/knadh/koanf/v2       config file + env var layering
 //
 // HARD RULE: this module must build with CGO_ENABLED=0 on every target. A
@@ -38,10 +42,13 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/spf13/cobra v1.10.2
+	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/term v0.45.0
 )
 
 require (
+	github.com/danieljoos/wincred v1.2.3 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	golang.org/x/sys v0.47.0 // indirect

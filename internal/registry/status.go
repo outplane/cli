@@ -40,12 +40,19 @@ func status() Command {
 			{Name: "teamSlug", Type: "string | null"},
 			{Name: "teamId", Type: "string | null"},
 			{
-				Name: "teamSource",
-				Type: "string | null",
-				Description: "which of the six places the team came from " +
-					"(flag | environment | link file | config file | token claim)",
+				Name:        "teamSource",
+				Type:        "string | null",
+				Enum:        []string{"flag", "environment", "link file", "config file", "token claim"},
+				Description: "which of the five places the team came from",
 			},
-			{Name: "tokenSource", Type: "string | null", Description: "same set, for the credential"},
+			{
+				Name: "tokenSource",
+				Type: "string | null",
+				Enum: []string{"flag", "environment", "keychain", "credential file"},
+				Description: "where the credential came from. keychain means the operating " +
+					"system's own secret store; credential file means a plaintext copy on " +
+					"disk, which is what a machine with no keychain falls back to",
+			},
 			{Name: "expiresAt", Type: "string | null", Description: "RFC 3339, read from the token"},
 			{Name: "daysLeft", Type: "int | null", Description: "null when the token never expires, negative once it has passed"},
 			{Name: "expired", Type: "bool"},

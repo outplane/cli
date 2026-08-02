@@ -2,10 +2,12 @@
 // a request: which API to talk to, which credential to use, and which team and
 // application are in play.
 //
-// Three files, three jobs, and they are kept apart on purpose:
+// Three things, three jobs, and they are kept apart on purpose:
 //
-//	config.json       preferences. Never contains a secret.
-//	credentials.json  the token. Mode 0600, in a 0700 directory.
+//	config.json           preferences. Never contains a secret.
+//	the credential store  the tokens. The OS keychain where there is one, and
+//	                      a file with owner-only permissions where there is
+//	                      not. See store.go; OUTPLANE_TOKEN skips both.
 //	.outplane/link.json   which app this directory belongs to. Per-project.
 //
 // Resolution order is fixed and identical for every setting: an explicit flag,
@@ -47,13 +49,21 @@ const DefaultMetricsURL = "https://metrics.outplane.com"
 type Source string
 
 const (
-	SourceFlag    Source = "flag"
-	SourceEnv     Source = "environment"
-	SourceLink    Source = "link file"
-	SourceFile    Source = "config file"
-	SourceToken   Source = "token claim"
-	SourceDefault Source = "default"
-	SourceUnset   Source = "unset"
+	SourceFlag Source = "flag"
+	SourceEnv  Source = "environment"
+	SourceLink Source = "link file"
+	SourceFile Source = "config file"
+
+	// SourceKeychain and SourceCredentialFile are where a stored token came
+	// from. They are separate because the answer changes what a reader should
+	// do: a token in the keychain is encrypted at rest, and one in a file is a
+	// plaintext copy that a stray `cat` or a synced dotfiles directory can
+	// leak.
+	SourceKeychain       Source = "keychain"
+	SourceCredentialFile Source = "credential file"
+	SourceToken          Source = "token claim"
+	SourceDefault        Source = "default"
+	SourceUnset          Source = "unset"
 )
 
 // Value is a resolved setting together with its origin.
@@ -65,9 +75,9 @@ type Value struct {
 func (v Value) String() string { return v.Value }
 func (v Value) IsSet() bool    { return v.Value != "" }
 
-// File is the on-disk preferences file. It never holds a secret; the token
-// lives in a separate file with tighter permissions so that a stray `cat` of
-// the config, or a screen share, cannot leak a credential.
+// File is the on-disk preferences file. It never holds a secret; tokens live
+// in the credential store, so that a stray `cat` of the config, or a screen
+// share, cannot leak one.
 //
 // Profiles is a map even though the CLI currently exposes only one. Shaping it
 // this way costs nothing today and is the difference between adding

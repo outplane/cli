@@ -88,8 +88,17 @@ func resolveTeamAndToken(ov Overrides, link *Link, profile Profile) (teamID, tea
 
 	return Value{cred.TeamID, source},
 		Value{cred.TeamSlug, source},
-		Value{cred.Token, SourceFile},
+		Value{cred.Token, storedTokenSource()},
 		nil
+}
+
+// storedTokenSource says which store answered, so that `status` can report a
+// plaintext token as one rather than as "signed in" and nothing more.
+func storedTokenSource() Source {
+	if CredentialStore() == "keychain" {
+		return SourceKeychain
+	}
+	return SourceCredentialFile
 }
 
 // requestedTeam returns the team the invocation is asking for, and where that
