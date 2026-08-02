@@ -201,7 +201,7 @@ func newRoot(exec *execctx.Context) *cobra.Command {
 		// A group, such as `outplane app --help`. Showing the whole command
 		// surface here would discard the narrowing the reader just did.
 		if cmd != root && cmd.HasSubCommands() {
-			printGroupHelp(cmd.OutOrStdout(), cmd.Name())
+			printGroupHelp(cmd.OutOrStdout(), commandPath(cmd))
 			return
 		}
 		printRootHelp(cmd.OutOrStdout())
@@ -322,7 +322,7 @@ func childOrGroup(parent *cobra.Command, name string) *cobra.Command {
 		// be consulted and `outplane app remove` would exit 0. Being runnable
 		// is what puts the argument check back in the path.
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			printGroupHelp(cmd.OutOrStdout(), cmd.Name())
+			printGroupHelp(cmd.OutOrStdout(), commandPath(cmd))
 			return nil
 		},
 	}
@@ -335,16 +335,24 @@ func childOrGroup(parent *cobra.Command, name string) *cobra.Command {
 // Separate from printRootHelp because somebody who typed `outplane app` has
 // already narrowed things down, and answering with the entire command surface
 // throws that away.
-func printGroupHelp(w interface{ Write([]byte) (int, error) }, group string) {
-	fmt.Fprintf(w, "Commands for managing %ss.\n\n", group)
+// printGroupHelp lists what lives under a group, such as `outplane app` or
+// `outplane env group`.
+//
+// The path matters, not just the last word. A group can be nested, and matching
+// on the leaf name alone made `outplane env group --help` look for commands
+// beginning "group", find none, and call itself `outplane group`.
+func printGroupHelp(w interface{ Write([]byte) (int, error) }, path []string) {
+	group := strings.Join(path, " ")
+
+	fmt.Fprintf(w, "Commands for managing %ss.\n\n", path[len(path)-1])
 	fmt.Fprintln(w, "USAGE")
 	fmt.Fprintf(w, "  outplane %s <command> [flags]\n", group)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "COMMANDS")
 
 	for _, c := range sortedCommands() {
-		if len(c.Path) > 1 && c.Path[0] == group {
-			fmt.Fprintf(w, "  %-24s %s\n", strings.Join(c.Path, " "), c.Short)
+		if len(c.Path) > len(path) && strings.Join(c.Path[:len(path)], " ") == group {
+			fmt.Fprintf(w, "  %-26s %s\n", strings.Join(c.Path, " "), c.Short)
 		}
 	}
 
@@ -352,6 +360,16 @@ func printGroupHelp(w interface{ Write([]byte) (int, error) }, group string) {
 	fmt.Fprintln(w, "LEARN MORE")
 	fmt.Fprintf(w, "  outplane %s <command> --help   detailed help, with runnable examples\n", group)
 	fmt.Fprintln(w)
+}
+
+// commandPath is the command's path without the program name, which is how the
+// registry addresses it.
+func commandPath(cmd *cobra.Command) []string {
+	parts := strings.Fields(cmd.CommandPath())
+	if len(parts) > 0 {
+		return parts[1:]
+	}
+	return nil
 }
 
 // sortedCommands returns the registry in a stable display order, so that help
