@@ -59,22 +59,7 @@ func appCreate(ctx context.Context, req Request) (output.Table, error) {
 	cli.Out.Note("Deployment %d started. It is not finished.", created.DeploymentID)
 	cli.Out.Note("Watch it with: outplane deploy logs %d", created.DeploymentID)
 
-	reportSkipped(req, "volume", created.SkippedVolumes)
-	reportSkipped(req, "variable group", created.SkippedEnvGroups)
-
 	return createTable(spec, created, true), nil
-}
-
-// reportSkipped says what the server could not attach.
-//
-// The server attaches volumes and variable groups on a best-effort basis and
-// reports which ones it could not, so this is a relay rather than a check: the
-// CLI does not go looking, and does not need to know why one failed.
-func reportSkipped(req Request, kind string, ids []string) {
-	for _, id := range ids {
-		req.CLI.Out.Note("The %s %s was not attached. It may not exist, belong to another "+
-			"team, or already be in use.", kind, id)
-	}
 }
 
 // explainRepositoryAccess adds a way forward when the platform cannot see the
@@ -260,21 +245,19 @@ func createTable(spec core.NewApp, created core.CreatedApp, changed bool) output
 		Columns: []string{"name", "appId", "deploymentId", "source", "size", "instances", "changed"},
 		Total:   1,
 		Rows: []map[string]any{{
-			"name":             spec.Name,
-			"appId":            nilIfEmpty(created.AppID),
-			"deploymentId":     nilIfZero(created.DeploymentID),
-			"source":           sourceDescription(spec),
-			"repository":       nilIfEmpty(spec.Repository),
-			"branch":           nilIfEmpty(spec.Branch),
-			"imageRef":         nilIfEmpty(spec.Image),
-			"buildMethod":      buildMethodOf(spec),
-			"size":             spec.InstanceType,
-			"instances":        spec.Instances,
-			"ports":            ports,
-			"envCount":         len(spec.Env),
-			"skippedVolumes":   stringsOrNil(created.SkippedVolumes),
-			"skippedEnvGroups": stringsOrNil(created.SkippedEnvGroups),
-			"changed":          changed,
+			"name":         spec.Name,
+			"appId":        nilIfEmpty(created.AppID),
+			"deploymentId": nilIfZero(created.DeploymentID),
+			"source":       sourceDescription(spec),
+			"repository":   nilIfEmpty(spec.Repository),
+			"branch":       nilIfEmpty(spec.Branch),
+			"imageRef":     nilIfEmpty(spec.Image),
+			"buildMethod":  buildMethodOf(spec),
+			"size":         spec.InstanceType,
+			"instances":    spec.Instances,
+			"ports":        ports,
+			"envCount":     len(spec.Env),
+			"changed":      changed,
 		}},
 	}
 }
@@ -293,14 +276,4 @@ func buildMethodOf(spec core.NewApp) string {
 		return "prebuilt-image"
 	}
 	return spec.BuildMethod
-}
-
-// stringsOrNil keeps an empty list out of the output, so that "nothing was
-// skipped" reads as null rather than as an empty array a consumer has to
-// distinguish from a missing field.
-func stringsOrNil(values []string) any {
-	if len(values) == 0 {
-		return nil
-	}
-	return values
 }

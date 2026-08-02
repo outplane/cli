@@ -456,17 +456,6 @@ func appCreate() Command {
 			{Name: "instances", Type: "int"},
 			{Name: "ports", Type: "array", Description: "{port, scheme, public}"},
 			{Name: "envCount", Type: "int", Description: "how many variables were set. Values are never returned"},
-			{
-				Name: "skippedVolumes",
-				Type: "array | null",
-				Description: "ids the server could not attach, as it reported them. " +
-					"null when everything attached",
-			},
-			{
-				Name:        "skippedEnvGroups",
-				Type:        "array | null",
-				Description: "the same, for variable groups",
-			},
 			{Name: "changed", Type: "bool", Description: "false for a dry run"},
 		},
 
@@ -542,10 +531,9 @@ func appCreate() Command {
 				"The exceptions are the plan limit and the name already being taken, which only " +
 				"the server knows.",
 			"Variable values are never echoed back. envCount reports how many were set.",
-			"A volume or a group the server cannot attach does not fail the creation, because " +
-				"the application already exists by then. The server names what it skipped and " +
-				"the CLI relays it: check skippedVolumes and skippedEnvGroups rather than " +
-				"reading exit 0 as everything attached.",
+			"--volume and --env-group take ids of things that already exist. Attaching is " +
+				"best effort on the server: one it cannot attach is skipped and the creation " +
+				"succeeds anyway, so confirm with `outplane app get` when it matters.",
 		},
 
 		Related: []string{"app list", "app get", "deploy create", "env set", "app delete"},

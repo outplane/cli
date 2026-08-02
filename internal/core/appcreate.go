@@ -44,9 +44,9 @@ type NewApp struct {
 	Ports []NewPort
 	Env   map[string]string
 
-	// Volumes and EnvGroups reference things that already exist. Attaching is
-	// best effort: one the server cannot attach does not fail the creation, and
-	// the response names it in SkippedVolumes or SkippedEnvGroups.
+	// Volumes and EnvGroups reference things that already exist, by id.
+	// Attaching is best effort on the server: one it cannot attach is skipped
+	// and the creation succeeds regardless.
 	Volumes   []Mount
 	EnvGroups []string
 }
@@ -64,18 +64,10 @@ type NewPort struct {
 	Public bool
 }
 
-// CreatedApp is what the server returns.
-//
-// The skipped lists exist because attaching is best effort: a volume or a group
-// the server cannot attach does not fail the creation, so it names them instead.
-// Without that the caller would have to go and look, which is a question only
-// the server can answer.
+// CreatedApp is what the server returns, which is two identifiers.
 type CreatedApp struct {
 	AppID        string `json:"appId"`
 	DeploymentID int    `json:"firstAppDeploymentId"`
-
-	SkippedVolumes   []string `json:"skippedVolumeIds"`
-	SkippedEnvGroups []string `json:"skippedEnvVariableGroupIds"`
 }
 
 // InstanceTypes are the sizes an application can run at, smallest first.
