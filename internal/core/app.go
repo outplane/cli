@@ -458,3 +458,12 @@ func domainURL(domain, path string, ssl bool) string {
 	}
 	return scheme + "://" + domain + path
 }
+
+// DeleteApp removes an application.
+//
+// The platform refuses while a custom domain, an attached volume or a
+// deployment in flight still exists, and answers all three with the same shape
+// of error. Naming which one is the caller's job; see the delete command.
+func DeleteApp(ctx context.Context, c *api.Client, appID string) error {
+	return c.Delete(ctx, "/App/DeleteApplication/"+appID, nil)
+}

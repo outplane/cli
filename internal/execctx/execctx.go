@@ -278,10 +278,11 @@ func detectNoColour(stdoutTTY bool) bool {
 // this is the whole of what golang.org/x/term would give us here, and every
 // dependency is a chance to reintroduce cgo, which would break the static
 // binary that motivated choosing Go.
-func isTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
-}
+// isTerminal is implemented per platform, in isatty_*.go.
+//
+// It used to test os.ModeCharDevice, which is wrong in a way that mattered:
+// /dev/null is a character device, so every invocation with stdin or stdout
+// redirected to it — the normal shape of a CI job, a cron entry and any agent
+// harness that allocates no pty — was treated as an interactive terminal. That
+// silently disabled agent detection, which is what the destructive-command gate
+// depends on, and chose text output where a pipe expected JSON.

@@ -332,10 +332,12 @@ func appDelete() Command {
 	return Command{
 		Path:  []string{"app", "delete"},
 		Short: "permanently delete an application",
-		Long: "Deletes an application and everything attached to it.\n\n" +
-			"There is no undelete and no retention window. Detached volumes survive; " +
-			"attached ones and custom domains do not. Run with --dry-run first to see " +
-			"exactly what would be destroyed.",
+		Long: "Deletes an application and its deployment history.\n\n" +
+			"There is no undelete and no retention window.\n\n" +
+			"Three things stop a deletion rather than being deleted with it: a custom " +
+			"domain, an attached volume, and a deployment still in flight. Each has to be " +
+			"removed first. --dry-run reports which of them apply before you type a " +
+			"confirmation.",
 
 		Risk:         RiskDestructive,
 		RequiresAuth: true,
@@ -344,7 +346,12 @@ func appDelete() Command {
 
 		SupportsDryRun: true,
 
-		APICalls: []string{"DELETE /api/App/DeleteApplication/{appId}"},
+		APICalls: []string{
+			"GET /api/App/GetAppById/{appId}",
+			"GET /api/Volume/GetVolumesByAppId/{appId}",
+			"GET /api/AppDeployment/GetAppDeploymentsByAppId/{appId}",
+			"DELETE /api/App/DeleteApplication/{appId}",
+		},
 
 		Args: []Arg{
 			{
@@ -373,25 +380,40 @@ func appDelete() Command {
 		},
 
 		OutputFields: []Field{
-			{Name: "deleted", Type: "bool"},
-			{Name: "app", Type: "object", Description: "{id, name}"},
+			{Name: "deleted", Type: "bool", Description: "false for a dry run, and for a refusal"},
+			{Name: "app", Type: "string", Description: "the application's immutable name"},
+			{Name: "appId", Type: "string"},
 			{
-				Name:        "cascaded",
-				Type:        "object",
-				Description: "what went with it: {volumes: [], domains: [], deployments: int}",
+				Name: "blockers",
+				Type: "array",
+				Description: "what would stop the deletion: {kind, detail}, where kind is " +
+					"customDomain, volume or deployment. Empty when nothing is in the way",
 			},
 		},
 
-		ErrorCodes: []string{"app.not_found", "app.confirm_name_mismatch", "confirmation.required"},
-		ExitCodes:  []int{0, 2, 3, 4, 5, 8},
+		ErrorCodes: []string{
+			"confirmation.required",
+			"app.confirm_name_mismatch",
+			"app.delete_blocked",
+			"app.not_found",
+			"usage.empty_argument",
+		},
+		ExitCodes: []int{0, 2, 3, 4, 5, 8},
 
 		Examples: []Example{
 			{
-				Title:        "see exactly what deletion would destroy",
+				Title:        "see what would stop the deletion, before confirming anything",
 				Command:      "outplane app delete checkout --dry-run --json",
 				Argv:         []string{"outplane", "app", "delete", "checkout", "--dry-run", "--json"},
 				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
 				Risk:         RiskRead,
+				OutputSample: map[string]any{
+					"deleted": false,
+					"app":     "checkout",
+					"blockers": []any{
+						map[string]any{"kind": "customDomain", "detail": "https://checkout.example.com"},
+					},
+				},
 			},
 			{
 				Title:        "request deletion. Returns exit 4 with a command to replay",
@@ -411,10 +433,15 @@ func appDelete() Command {
 
 		AutomationNotes: []string{
 			"This command never prompts. Without confirmation it exits 4 and returns the exact " +
-				"command to replay in the error's confirmCommand field.",
-			"Exit 4 is not a failure. It means the confirmation belongs to a human.",
+				"command to replay in the error's confirm_command field.",
+			"Exit 4 is not a failure. It means the confirmation belongs to somebody else.",
 			"Under a detected agent harness it exits 4 even when --yes and --confirm-name are " +
-				"supplied, so the approval gate stays outside the CLI.",
+				"supplied. A flag is not a safety boundary, because an agent that read this " +
+				"note can emit any flag in it; the harness's own approval step is the gate.",
+			"A custom domain, an attached volume or a deployment in flight each stop the " +
+				"deletion instead of being removed with it. blockers lists them, in --dry-run " +
+				"before anything is attempted and in the error when the server refuses.",
+			"--confirm-name is matched against the immutable name, not the display name.",
 			"Deletion is irreversible. There is no undelete and no retention window.",
 		},
 

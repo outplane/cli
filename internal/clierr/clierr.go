@@ -221,6 +221,17 @@ func AsError(err error) *Error {
 	}
 }
 
+// WithConfirmCommand attaches the exact command that would proceed.
+//
+// It exists so the caller never has to reconstruct it. A destructive command
+// refuses with an argv the reader can hand to a person, paste into an approval
+// or replay verbatim, which is what makes exit 4 a step in a workflow rather
+// than a dead end.
+func (e *Error) WithConfirmCommand(argv ...string) *Error {
+	e.ConfirmCommand = argv
+	return e
+}
+
 // Cancelled turns an interrupted context into the error it actually is, or
 // returns nil when nothing was interrupted.
 //
