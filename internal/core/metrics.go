@@ -213,7 +213,7 @@ type promResponse struct {
 // A sample the CLI cannot use is dropped rather than reported. Three shapes get
 // here and none of them is a reading:
 //
-//   - NaN, which Prometheus writes for a series it could not compute. Go parses
+//   - NaN, which the gateway writes for a series it could not compute. Go parses
 //     it happily, which is how it used to arrive as a confident 0.
 //   - +Inf, from a division by zero upstream. Converted to an integer it became
 //     9223372036854775807 millicores: not a large number, a fictional one.
