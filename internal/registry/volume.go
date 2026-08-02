@@ -156,7 +156,21 @@ func volumeGet() Command {
 				Placeholders: map[string]string{"data": "<VOLUME_NAME>"},
 				Risk:         RiskRead,
 			},
-		},
+			{
+				Title:        "read where it is mounted, in a script",
+				Command:      "outplane volume get data --json --fields app,mountPath,sizeGb",
+				Argv:         []string{"outplane", "volume", "get", "data", "--json", "--fields", "app,mountPath,sizeGb"},
+				Placeholders: map[string]string{"data": "<VOLUME_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"app": "checkout", "mountPath": "/data", "sizeGb": 10},
+			},
+			{
+				Title:        "check whether anything uses it before deleting it",
+				Command:      "outplane volume get data -o text",
+				Argv:         []string{"outplane", "volume", "get", "data", "-o", "text"},
+				Placeholders: map[string]string{"data": "<VOLUME_NAME>"},
+				Risk:         RiskRead,
+			}},
 
 		AutomationNotes: []string{
 			"There is no per-volume endpoint that takes a name, so this lists the team's " +
@@ -234,7 +248,14 @@ func volumeCreate() Command {
 				Placeholders: map[string]string{"data": "<VOLUME_NAME>", "checkout": "<APP_NAME>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "check the request without provisioning a disk",
+				Command:      "outplane volume create data --size 10 --dry-run --json",
+				Argv:         []string{"outplane", "volume", "create", "data", "--size", "10", "--dry-run", "--json"},
+				Placeholders: map[string]string{"data": "<VOLUME_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"name": "data", "sizeGb": 10, "changed": false},
+			}},
 
 		AutomationNotes: []string{
 			"Creating and attaching are one request and two steps on the server: the disk is " +
@@ -276,6 +297,10 @@ func volumeAttach() Command {
 		Flags: []Flag{
 			{Name: "app", Type: "string", Description: "application to mount it on. Required"},
 			{Name: "mount", Type: "string", Description: "path inside the container. Required"},
+			{
+				Name: "deploy", Type: "bool", Default: "false",
+				Description: "deploy afterwards, so the mount reaches the running app",
+			},
 		},
 
 		OutputFields: append(volumeFields(),
@@ -298,7 +323,21 @@ func volumeAttach() Command {
 				Placeholders: map[string]string{"data": "<VOLUME_NAME>", "checkout": "<APP_NAME>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "check the mount without changing anything",
+				Command:      "outplane volume attach data --app checkout --mount /data --dry-run --json",
+				Argv:         []string{"outplane", "volume", "attach", "data", "--app", "checkout", "--mount", "/data", "--dry-run", "--json"},
+				Placeholders: map[string]string{"data": "<VOLUME_NAME>", "checkout": "<APP_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"name": "data", "app": "checkout", "mountPath": "/data", "changed": false},
+			},
+			{
+				Title:        "attach it and deploy in one step",
+				Command:      "outplane volume attach data --app checkout --mount /data --deploy --json --fields app,mountPath,changed",
+				Argv:         []string{"outplane", "volume", "attach", "data", "--app", "checkout", "--mount", "/data", "--deploy", "--json", "--fields", "app,mountPath,changed"},
+				Placeholders: map[string]string{"data": "<VOLUME_NAME>", "checkout": "<APP_NAME>"},
+				Risk:         RiskWrite,
+			}},
 
 		AutomationNotes: []string{
 			"The mount reaches the running application at its next deployment, not " +
@@ -331,7 +370,15 @@ func volumeDetach() Command {
 
 		APICalls: []string{"PUT /api/Volume/UpdateVolume/{volumeId}"},
 
-		Args:         []Arg{volumeArg()},
+		Args: []Arg{volumeArg()},
+
+		Flags: []Flag{
+			{
+				Name: "deploy", Type: "bool", Default: "false",
+				Description: "deploy afterwards, so the mount reaches the running app",
+			},
+		},
+
 		OutputFields: append(volumeFields(), Field{Name: "changed", Type: "bool"}),
 
 		ErrorCodes: []string{"volume.not_found", "usage.missing_argument"},
@@ -345,7 +392,21 @@ func volumeDetach() Command {
 				Placeholders: map[string]string{"data": "<VOLUME_NAME>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "see which application would lose it",
+				Command:      "outplane volume detach data --dry-run --json",
+				Argv:         []string{"outplane", "volume", "detach", "data", "--dry-run", "--json"},
+				Placeholders: map[string]string{"data": "<VOLUME_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"name": "data", "app": "checkout", "changed": false},
+			},
+			{
+				Title:        "detach it and deploy, so the running app loses the mount now",
+				Command:      "outplane volume detach data --deploy --json --fields app,changed",
+				Argv:         []string{"outplane", "volume", "detach", "data", "--deploy", "--json", "--fields", "app,changed"},
+				Placeholders: map[string]string{"data": "<VOLUME_NAME>"},
+				Risk:         RiskWrite,
+			}},
 
 		AutomationNotes: []string{
 			"Detaching is not deleting. The disk keeps its contents and its cost, and can be " +
@@ -415,6 +476,14 @@ func volumeDelete() Command {
 				Argv:         []string{"outplane", "volume", "delete", "data", "--yes", "--confirm-name", "data"},
 				Placeholders: map[string]string{"data": "<VOLUME_NAME>"},
 				Risk:         RiskDestructive,
+			},
+			{
+				Title:        "check what the name resolves to, and what is on it",
+				Command:      "outplane volume delete data --dry-run --json",
+				Argv:         []string{"outplane", "volume", "delete", "data", "--dry-run", "--json"},
+				Placeholders: map[string]string{"data": "<VOLUME_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"name": "data", "sizeGb": 10, "changed": false},
 			},
 		},
 

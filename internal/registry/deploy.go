@@ -205,7 +205,14 @@ func deployGet() Command {
 				Placeholders: map[string]string{"412": "<DEPLOYMENT_ID>"},
 				Risk:         RiskRead,
 			},
-		},
+			{
+				Title:        "read one field in a script",
+				Command:      "outplane deploy get 4821 --json --fields status,finishedAt",
+				Argv:         []string{"outplane", "deploy", "get", "4821", "--json", "--fields", "status,finishedAt"},
+				Placeholders: map[string]string{"4821": "<DEPLOYMENT_ID>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"status": "ready", "finishedAt": "2026-08-02T09:14:05Z"},
+			}},
 
 		AutomationNotes: []string{
 			"The application comes second, after the id. It is the one command in the CLI " +

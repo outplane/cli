@@ -81,6 +81,12 @@ func dbList() Command {
 				Risk:    RiskRead,
 			},
 			{
+				Title:   "see where each one runs",
+				Command: "outplane db list -o text",
+				Argv:    []string{"outplane", "db", "list", "-o", "text"},
+				Risk:    RiskRead,
+			},
+			{
 				Title:   "wait for one to finish provisioning",
 				Command: "outplane db list --json --fields name,status",
 				Argv:    []string{"outplane", "db", "list", "--json", "--fields", "name,status"},
@@ -140,6 +146,26 @@ func dbGet() Command {
 		ExitCodes:  []int{0, 2, 3, 5, 8},
 
 		Examples: []Example{
+			{
+				Title:   "list the roles a script can connect as",
+				Command: "outplane db get orders --json --fields roles,databases",
+				Argv: []string{"outplane", "db", "get", "orders", "--json",
+					"--fields", "roles,databases"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{
+					"roles":     []any{"app"},
+					"databases": []any{map[string]any{"name": "main", "owner": "app"}},
+				},
+			},
+			{
+				Title:        "wait until it accepts connections",
+				Command:      "outplane db get orders --json --fields status",
+				Argv:         []string{"outplane", "db", "get", "orders", "--json", "--fields", "status"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"status": "active"},
+			},
 			{
 				Title:        "show a database",
 				Command:      "outplane db get orders",
@@ -223,6 +249,14 @@ func dbURL() Command {
 				Argv:         []string{"outplane", "db", "url", "orders"},
 				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
 				Risk:         RiskRead,
+			},
+			{
+				Title:        "read the parts rather than the string",
+				Command:      "outplane db url orders --json --fields role,database,db",
+				Argv:         []string{"outplane", "db", "url", "orders", "--json", "--fields", "role,database,db"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"role": "app", "database": "main", "db": "orders"},
 			},
 			{
 				Title:        "name them when there is a choice",
@@ -311,6 +345,14 @@ func dbCreate() Command {
 				Risk:         RiskWrite,
 			},
 			{
+				Title:   "check the request without provisioning anything",
+				Command: "outplane db create orders --region aws-eu-central-1 --dry-run --json",
+				Argv: []string{"outplane", "db", "create", "orders", "--region",
+					"aws-eu-central-1", "--dry-run", "--json"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
+				Risk:         RiskRead,
+			},
+			{
 				Title:        "an older major version",
 				Command:      "outplane db create legacy --region aws-eu-central-1 --version 15",
 				Argv:         []string{"outplane", "db", "create", "legacy", "--region", "aws-eu-central-1", "--version", "15"},
@@ -374,6 +416,14 @@ func dbDelete() Command {
 				Title:        "see what would go",
 				Command:      "outplane db delete orders --dry-run",
 				Argv:         []string{"outplane", "db", "delete", "orders", "--dry-run"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
+				Risk:         RiskRead,
+			},
+			{
+				Title:   "check what the name resolves to first",
+				Command: "outplane db delete orders --dry-run --json --fields db,dbId",
+				Argv: []string{"outplane", "db", "delete", "orders", "--dry-run", "--json",
+					"--fields", "db,dbId"},
 				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
 				Risk:         RiskRead,
 			},

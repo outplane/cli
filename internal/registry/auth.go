@@ -97,7 +97,13 @@ func login() Command {
 				Argv:    []string{"outplane", "login", "--token-stdin"},
 				Risk:    RiskWrite,
 			},
-		},
+			{
+				Title:        "sign in and confirm which team is active",
+				Command:      "outplane login --json --fields team,expiresAt",
+				Argv:         []string{"outplane", "login", "--json", "--fields", "team,expiresAt"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{"team": "acme", "expiresAt": "2026-09-01T13:58:47Z"},
+			}},
 
 		AutomationNotes: []string{
 			"In CI, do not sign in. Set OUTPLANE_TOKEN and every command will use it; " +
@@ -164,7 +170,12 @@ func logout() Command {
 				Argv:    []string{"outplane", "logout", "--all"},
 				Risk:    RiskWrite,
 			},
-		},
+			{
+				Title:   "sign out and confirm it in a script",
+				Command: "outplane logout --json --fields team,signedOut",
+				Argv:    []string{"outplane", "logout", "--json", "--fields", "team,signedOut"},
+				Risk:    RiskWrite,
+			}},
 
 		AutomationNotes: []string{
 			"This removes the local copy only. The token stays valid until it is " +

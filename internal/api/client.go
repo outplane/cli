@@ -170,6 +170,69 @@ func (c *Client) GetAbsolute(ctx context.Context, rawURL string) ([]byte, error)
 	return raw, nil
 }
 
+// RawResponse is one arbitrary request's answer, kept in both shapes.
+//
+// Data is what every other command would have decoded, and Envelope is the
+// whole reply including the fields this package normally hides. Both are here
+// because the caller is `outplane api`, whose reason to exist is that the CLI
+// does not know what the caller is looking for.
+type RawResponse struct {
+	Status    int
+	Data      json.RawMessage
+	Envelope  json.RawMessage
+	RequestID string
+}
+
+// Raw performs a request this package knows nothing about.
+//
+// It is the escape hatch's transport, and it deliberately keeps everything the
+// ordinary path provides: the credential, the team header, the version header,
+// and the same status mapping, so that a 403 through here exits the way a 403
+// through `app list` does. What it does not do is decode into a type, because
+// there is no type to decode into.
+func (c *Client) Raw(ctx context.Context, method, path string, body []byte) (RawResponse, error) {
+	var reader io.Reader
+	if len(body) > 0 {
+		reader = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
+	if err != nil {
+		return RawResponse{}, clierr.New(clierr.KindInternal, "could not build request: %v", err)
+	}
+	c.setHeaders(req, len(body) > 0)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return RawResponse{}, transportError(err, "the Out Plane API")
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return RawResponse{}, clierr.New(clierr.KindUpstream, "could not read the response: %v", err)
+	}
+
+	out := RawResponse{Status: resp.StatusCode, RequestID: requestID(resp)}
+	if len(raw) > 0 {
+		out.Envelope = json.RawMessage(raw)
+	}
+
+	var env envelope
+	if len(raw) > 0 && json.Unmarshal(raw, &env) == nil {
+		out.Data = env.Data
+	}
+
+	if resp.StatusCode >= 400 {
+		// Mapped like any other failure, so an agent reading exit codes does
+		// not need a second rule for this command. The body travels in details
+		// for the case where the caller was inspecting the error itself.
+		return out, toError(resp.StatusCode, env, out.RequestID).
+			WithDetail("responseBody", truncate(string(raw), 2000))
+	}
+	return out, nil
+}
+
 // Dial opens a WebSocket to the API.
 //
 // A socket gets everything a request gets: the same credential, the same team

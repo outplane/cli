@@ -82,7 +82,12 @@ func teamList() Command {
 					"truncated": false,
 				},
 			},
-		},
+			{
+				Title:   "see when each credential expires",
+				Command: "outplane team list -o text",
+				Argv:    []string{"outplane", "team", "list", "-o", "text"},
+				Risk:    RiskRead,
+			}},
 
 		AutomationNotes: []string{
 			"This lists teams with a stored credential, not teams you belong to. A team " +
@@ -156,7 +161,19 @@ func teamUse() Command {
 				Placeholders: map[string]string{"acme": "<TEAM_SLUG>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "switch and confirm it in a script",
+				Command:      "outplane team use acme --json --fields team,changed",
+				Argv:         []string{"outplane", "team", "use", "acme", "--json", "--fields", "team,changed"},
+				Placeholders: map[string]string{"acme": "<TEAM_SLUG>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:   "see which teams can be switched to",
+				Command: "outplane team use --json",
+				Argv:    []string{"outplane", "team", "use", "--json"},
+				Risk:    RiskWrite,
+			}},
 
 		AutomationNotes: []string{
 			"This writes a preference to this machine's config. In CI, do not use it: set " +

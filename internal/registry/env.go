@@ -176,7 +176,14 @@ func envGet() Command {
 				Argv:    []string{"outplane", "env", "get", "DATABASE_URL"},
 				Risk:    RiskRead,
 			},
-		},
+			{
+				Title:        "read the key and value as an object",
+				Command:      "outplane env get DATABASE_URL --json",
+				Argv:         []string{"outplane", "env", "get", "DATABASE_URL", "--json"},
+				Placeholders: map[string]string{"DATABASE_URL": "<KEY>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"key": "DATABASE_URL", "value": "postgresql://…"},
+			}},
 
 		AutomationNotes: []string{
 			"Text is the default even in a pipe, unlike every other command. stdout carries " +
@@ -289,7 +296,13 @@ func envSet() Command {
 				Placeholders: map[string]string{"checkout": "<APP_NAME>", "orders": "<DATABASE_NAME>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "set one and read what changed",
+				Command:      "outplane env set LOG_LEVEL=debug --json --fields keys,changed",
+				Argv:         []string{"outplane", "env", "set", "LOG_LEVEL=debug", "--json", "--fields", "keys,changed"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{"keys": []any{"LOG_LEVEL"}, "changed": true},
+			}},
 
 		AutomationNotes: []string{
 			"Saving does not restart anything. Without --deploy the running application " +
@@ -377,6 +390,19 @@ func envUnset() Command {
 				Argv:         []string{"outplane", "env", "unset", "LOG_LEVEL", "TIMEOUT", "--app", "checkout", "--deploy"},
 				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
 				Risk:         RiskWrite,
+			},
+			{
+				Title:        "check the names resolve before removing anything",
+				Command:      "outplane env unset LOG_LEVEL --dry-run --json",
+				Argv:         []string{"outplane", "env", "unset", "LOG_LEVEL", "--dry-run", "--json"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"keys": []any{"LOG_LEVEL"}, "changed": false},
+			},
+			{
+				Title:   "remove several at once and read the result",
+				Command: "outplane env unset LOG_LEVEL TIMEOUT --json --fields keys,changed",
+				Argv:    []string{"outplane", "env", "unset", "LOG_LEVEL", "TIMEOUT", "--json", "--fields", "keys,changed"},
+				Risk:    RiskWrite,
 			},
 		},
 

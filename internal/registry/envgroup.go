@@ -92,7 +92,17 @@ func envGroupList() Command {
 				Argv:    []string{"outplane", "env", "group", "list", "--json", "--fields", "name,id,assignments"},
 				Risk:    RiskRead,
 			},
-		},
+			{
+				Title:   "read the groups in a pipeline",
+				Command: "outplane env group list --json --fields name,variables,assignments",
+				Argv:    []string{"outplane", "env", "group", "list", "--json", "--fields", "name,variables,assignments"},
+				Risk:    RiskRead,
+				OutputSample: map[string]any{
+					"items":     []any{map[string]any{"name": "shared", "variables": 12, "assignments": 3}},
+					"total":     1,
+					"truncated": false,
+				},
+			}},
 
 		AutomationNotes: []string{
 			"This lists the groups, not what is in them. `env group get` reports the " +
@@ -174,7 +184,20 @@ func envGroupGet() Command {
 					"truncated": false,
 				},
 			},
-		},
+			{
+				Title:        "read the keys without the values",
+				Command:      "outplane env group get shared --json --fields name,entries",
+				Argv:         []string{"outplane", "env", "group", "get", "shared", "--json", "--fields", "name,entries"},
+				Placeholders: map[string]string{"shared": "<GROUP_NAME>"},
+				Risk:         RiskRead,
+			},
+			{
+				Title:        "see which applications would be affected by a change",
+				Command:      "outplane env group get shared -o text",
+				Argv:         []string{"outplane", "env", "group", "get", "shared", "-o", "text"},
+				Placeholders: map[string]string{"shared": "<GROUP_NAME>"},
+				Risk:         RiskRead,
+			}},
 
 		AutomationNotes: []string{
 			"The rows are the variables. Which group they belong to, how it is scoped and " +
@@ -251,7 +274,14 @@ func envGroupCreate() Command {
 				Placeholders: map[string]string{"buildargs": "<GROUP_NAME>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "check the request without creating anything",
+				Command:      "outplane env group create shared --var A=1 --dry-run --json",
+				Argv:         []string{"outplane", "env", "group", "create", "shared", "--var", "A=1", "--dry-run", "--json"},
+				Placeholders: map[string]string{"shared": "<GROUP_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"name": "shared", "variables": 1, "changed": false},
+			}},
 
 		AutomationNotes: []string{
 			"A new group is assigned to nothing and therefore reaches nothing until " +
@@ -293,7 +323,7 @@ func envGroupSet() Command {
 		Flags: []Flag{
 			{Name: "var", Type: "strings", Description: "KEY=VALUE to add or replace, repeatable"},
 			{Name: "unset", Type: "strings", Description: "key to remove, repeatable"},
-			{Name: "description", Type: "string"},
+			{Name: "description", Type: "string", Description: "what the group is for"},
 			{Name: "build", Type: "bool", Default: "false", Description: "start injecting during builds"},
 			{Name: "no-build", Type: "bool", Default: "false", Description: "stop injecting during builds"},
 			{Name: "runtime", Type: "bool", Default: "false", Description: "start injecting at runtime"},
@@ -326,7 +356,14 @@ func envGroupSet() Command {
 				Placeholders: map[string]string{"shared": "<GROUP_NAME>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "see what would change, and what would stay",
+				Command:      "outplane env group set shared --var A=2 --dry-run --json",
+				Argv:         []string{"outplane", "env", "group", "set", "shared", "--var", "A=2", "--dry-run", "--json"},
+				Placeholders: map[string]string{"shared": "<GROUP_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"name": "shared", "variables": 12, "changed": false},
+			}},
 
 		AutomationNotes: []string{
 			"Every variable is sent back on every call, because the endpoint replaces the " +
@@ -396,9 +433,24 @@ func assignmentCommand(verb, short, long string) Command {
 
 		Examples: []Example{
 			{
+				Title:        "check what it would do, without doing it",
+				Command:      "outplane env group " + verb + " shared --app checkout --dry-run --json",
+				Argv:         []string{"outplane", "env", "group", verb, "shared", "--app", "checkout", "--dry-run", "--json"},
+				Placeholders: map[string]string{"shared": "<GROUP_NAME>", "checkout": "<APP_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"group": "shared", "app": "checkout", "changed": false},
+			},
+			{
 				Title:        verb + " a group",
 				Command:      "outplane env group " + verb + " shared --app checkout",
 				Argv:         []string{"outplane", "env", "group", verb, "shared", "--app", "checkout"},
+				Placeholders: map[string]string{"shared": "<GROUP_NAME>", "checkout": "<APP_NAME>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:        "read the result in a pipeline",
+				Command:      "outplane env group " + verb + " shared --app checkout --json --fields group,app,changed",
+				Argv:         []string{"outplane", "env", "group", verb, "shared", "--app", "checkout", "--json", "--fields", "group,app,changed"},
 				Placeholders: map[string]string{"shared": "<GROUP_NAME>", "checkout": "<APP_NAME>"},
 				Risk:         RiskWrite,
 			},
@@ -469,6 +521,14 @@ func envGroupDelete() Command {
 				Argv:         []string{"outplane", "env", "group", "delete", "shared", "--yes", "--confirm-name", "shared"},
 				Placeholders: map[string]string{"shared": "<GROUP_NAME>"},
 				Risk:         RiskDestructive,
+			},
+			{
+				Title:        "check what the name resolves to, and who uses it",
+				Command:      "outplane env group delete shared --dry-run --json",
+				Argv:         []string{"outplane", "env", "group", "delete", "shared", "--dry-run", "--json"},
+				Placeholders: map[string]string{"shared": "<GROUP_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"name": "shared", "assignments": 0, "changed": false},
 			},
 		},
 

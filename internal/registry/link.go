@@ -87,7 +87,12 @@ func link() Command {
 				Placeholders: map[string]string{"checkout": "<APP_NAME>", "acme": "<TEAM_SLUG>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:   "link and read what was written",
+				Command: "outplane link --json --fields app,team,path",
+				Argv:    []string{"outplane", "link", "--json", "--fields", "app,team,path"},
+				Risk:    RiskWrite,
+			}},
 
 		AutomationNotes: []string{
 			"The link is written in the current directory. A link already present in a " +
@@ -138,7 +143,18 @@ func unlink() Command {
 				Argv:    []string{"outplane", "unlink"},
 				Risk:    RiskWrite,
 			},
-		},
+			{
+				Title:   "remove the link and confirm it in a script",
+				Command: "outplane unlink --json --fields path,removed",
+				Argv:    []string{"outplane", "unlink", "--json", "--fields", "path,removed"},
+				Risk:    RiskWrite,
+			},
+			{
+				Title:   "remove a link from another directory",
+				Command: "outplane unlink --json",
+				Argv:    []string{"outplane", "unlink", "--json"},
+				Risk:    RiskWrite,
+			}},
 
 		AutomationNotes: []string{
 			"Removing nothing is a success, not an error, so a teardown script can run this " +

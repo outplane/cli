@@ -517,6 +517,18 @@ func appCreate() Command {
 				Risk:         RiskWrite,
 			},
 			{
+				Title:   "create one and read the ids in a pipeline",
+				Command: "outplane app create checkout --image nginx:latest --port 80 --json --fields appId,deploymentId",
+				Argv: []string{"outplane", "app", "create", "checkout", "--image", "nginx:latest",
+					"--port", "80", "--json", "--fields", "appId,deploymentId"},
+				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{
+					"appId":        "3f2b1c4e-0000-0000-0000-000000000000",
+					"deploymentId": 4821,
+				},
+			},
+			{
 				Title:        "check the request without sending it",
 				Command:      "outplane app create checkout --repo acme/checkout --branch main --dry-run",
 				Argv:         []string{"outplane", "app", "create", "checkout", "--repo", "acme/checkout", "--branch", "main", "--dry-run"},
@@ -631,6 +643,20 @@ func appScale() Command {
 				Risk:         RiskWrite,
 			},
 			{
+				Title:   "see what would change, without changing it",
+				Command: "outplane app scale checkout --instances 3 --dry-run --json",
+				Argv: []string{"outplane", "app", "scale", "checkout", "--instances", "3",
+					"--dry-run", "--json"},
+				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{
+					"app":               "checkout",
+					"instances":         3,
+					"previousInstances": 1,
+					"changed":           false,
+				},
+			},
+			{
 				Title:        "give it more memory, keeping the count",
 				Command:      "outplane app scale checkout --size op-34",
 				Argv:         []string{"outplane", "app", "scale", "checkout", "--size", "op-34"},
@@ -713,11 +739,24 @@ func pauseCommand(verb, short, long string) Command {
 
 		Examples: []Example{
 			{
+				Title:   "see what it would do, without doing it",
+				Command: "outplane app " + verb + " --dry-run",
+				Argv:    []string{"outplane", "app", verb, "--dry-run"},
+				Risk:    RiskRead,
+			},
+			{
 				Title:        verb + " an application",
 				Command:      "outplane app " + verb + " checkout",
 				Argv:         []string{"outplane", "app", verb, "checkout"},
 				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
 				Risk:         RiskWrite,
+			},
+			{
+				Title:        verb + " the linked one and read the result",
+				Command:      "outplane app " + verb + " --json --fields paused,changed",
+				Argv:         []string{"outplane", "app", verb, "--json", "--fields", "paused,changed"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{"paused": verb == "pause", "changed": true},
 			},
 		},
 
@@ -731,9 +770,18 @@ func pauseCommand(verb, short, long string) Command {
 				"deploymentStatus. status is what says paused.",
 		},
 
-		Related: []string{"app pause", "app resume", "app scale", "app list"},
+		Related: []string{"app " + sibling(verb), "app scale", "app get", "app list"},
 		DocsURL: "https://docs.outplane.com/cli/app",
 	}
+}
+
+// sibling is the other half of the pair, so that neither declaration names
+// itself and neither can be changed without the other following.
+func sibling(verb string) string {
+	if verb == "pause" {
+		return "resume"
+	}
+	return "pause"
 }
 
 func appInstances() Command {
@@ -790,6 +838,13 @@ func appInstances() Command {
 				Title:        "what is running right now",
 				Command:      "outplane app instances checkout",
 				Argv:         []string{"outplane", "app", "instances", "checkout"},
+				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
+				Risk:         RiskRead,
+			},
+			{
+				Title:        "find the instance to open a shell on",
+				Command:      "outplane app instances checkout -o text",
+				Argv:         []string{"outplane", "app", "instances", "checkout", "-o", "text"},
 				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
 				Risk:         RiskRead,
 			},

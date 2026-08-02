@@ -101,7 +101,19 @@ func domainList() Command {
 				Placeholders: map[string]string{"checkout": "<APP_NAME>"},
 				Risk:         RiskRead,
 			},
-		},
+			{
+				Title:   "read the routes in a pipeline",
+				Command: "outplane domain list --json --fields host,path,app",
+				Argv:    []string{"outplane", "domain", "list", "--json", "--fields", "host,path,app"},
+				Risk:    RiskRead,
+				OutputSample: map[string]any{
+					"items": []any{map[string]any{
+						"host": "app.example.com", "path": "/", "app": "checkout",
+					}},
+					"total":     1,
+					"truncated": false,
+				},
+			}},
 
 		AutomationNotes: []string{
 			"One host can appear several times, once per path. The pair identifies a route; " +
@@ -163,7 +175,16 @@ func domainDNS() Command {
 				Argv:    []string{"outplane", "domain", "dns", "example.com"},
 				Risk:    RiskRead,
 			},
-		},
+			{
+				Title:        "read the record to create it with another tool",
+				Command:      "outplane domain dns app.example.com --json --fields type,name,value",
+				Argv:         []string{"outplane", "domain", "dns", "app.example.com", "--json", "--fields", "type,name,value"},
+				Placeholders: map[string]string{"app.example.com": "<HOST>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{
+					"type": "CNAME", "name": "app", "value": "domains-management.outplane.app",
+				},
+			}},
 
 		AutomationNotes: []string{
 			"Local. No request is made and no credential is needed, so this answers before " +
@@ -251,7 +272,14 @@ func domainAdd() Command {
 				Placeholders: map[string]string{"example.com": "<HOST>", "api01": "<APP_NAME>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "check the request without registering anything",
+				Command:      "outplane domain add app.example.com --dry-run --json",
+				Argv:         []string{"outplane", "domain", "add", "app.example.com", "--dry-run", "--json"},
+				Placeholders: map[string]string{"app.example.com": "<HOST>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"host": "app.example.com", "path": "/", "changed": false},
+			}},
 
 		AutomationNotes: []string{
 			"The host and the path together have to be unique. The same host with a " +
@@ -328,7 +356,14 @@ func domainPoint() Command {
 				Placeholders: map[string]string{"example.com": "<HOST>", "api01": "<APP_NAME>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "check which port the id belongs to first",
+				Command:      "outplane domain point app.example.com <PORT_ID> --dry-run --json",
+				Argv:         []string{"outplane", "domain", "point", "app.example.com", "<PORT_ID>", "--dry-run", "--json"},
+				Placeholders: map[string]string{"app.example.com": "<HOST>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"host": "app.example.com", "app": "checkout", "changed": false},
+			}},
 
 		AutomationNotes: []string{
 			"A host carrying more than one route is ambiguous without --path, and the error " +
@@ -378,7 +413,21 @@ func domainUnpoint() Command {
 				Placeholders: map[string]string{"app.example.com": "<HOST>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "see what it points at now",
+				Command:      "outplane domain unpoint app.example.com --dry-run --json",
+				Argv:         []string{"outplane", "domain", "unpoint", "app.example.com", "--dry-run", "--json"},
+				Placeholders: map[string]string{"app.example.com": "<HOST>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"host": "app.example.com", "app": nil, "changed": false},
+			},
+			{
+				Title:        "leave the route in place, pointing nowhere",
+				Command:      "outplane domain unpoint app.example.com --json --fields host,changed",
+				Argv:         []string{"outplane", "domain", "unpoint", "app.example.com", "--json", "--fields", "host,changed"},
+				Placeholders: map[string]string{"app.example.com": "<HOST>"},
+				Risk:         RiskWrite,
+			}},
 
 		AutomationNotes: []string{
 			"Idempotent. A route that already points nowhere reports changed false and " +
@@ -445,6 +494,14 @@ func domainRemove() Command {
 				Argv:         []string{"outplane", "domain", "remove", "app.example.com", "--yes", "--confirm-name", "app.example.com"},
 				Placeholders: map[string]string{"app.example.com": "<HOST>"},
 				Risk:         RiskDestructive,
+			},
+			{
+				Title:        "check which route the host resolves to",
+				Command:      "outplane domain remove app.example.com --dry-run --json",
+				Argv:         []string{"outplane", "domain", "remove", "app.example.com", "--dry-run", "--json"},
+				Placeholders: map[string]string{"app.example.com": "<HOST>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"host": "app.example.com", "path": "/", "changed": false},
 			},
 		},
 

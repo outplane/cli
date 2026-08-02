@@ -58,6 +58,25 @@ func dbRoleList() Command {
 				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
 				Risk:         RiskRead,
 			},
+			{
+				Title:        "read the names in a pipeline",
+				Command:      "outplane db role list orders --json --fields name",
+				Argv:         []string{"outplane", "db", "role", "list", "orders", "--json", "--fields", "name"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{
+					"items":     []any{map[string]any{"name": "app"}},
+					"total":     1,
+					"truncated": false,
+				},
+			},
+			{
+				Title:        "check whether one exists before creating it",
+				Command:      "outplane db role list orders -o text",
+				Argv:         []string{"outplane", "db", "role", "list", "orders", "-o", "text"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
+				Risk:         RiskRead,
+			},
 		},
 
 		AutomationNotes: []string{
@@ -102,9 +121,24 @@ func dbRoleCreate() Command {
 
 		Examples: []Example{
 			{
+				Title:        "check the request without creating anything",
+				Command:      "outplane db role create orders checkout --dry-run --json",
+				Argv:         []string{"outplane", "db", "role", "create", "orders", "checkout", "--dry-run", "--json"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>", "checkout": "<ROLE_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"kind": "role", "name": "checkout", "changed": false},
+			},
+			{
 				Title:        "a login for one application",
 				Command:      "outplane db role create orders checkout",
 				Argv:         []string{"outplane", "db", "role", "create", "orders", "checkout"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>", "checkout": "<ROLE_NAME>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:        "create one and read its connection string",
+				Command:      "outplane db role create orders checkout --json --fields name,changed",
+				Argv:         []string{"outplane", "db", "role", "create", "orders", "checkout", "--json", "--fields", "name,changed"},
 				Placeholders: map[string]string{"orders": "<DATABASE_NAME>", "checkout": "<ROLE_NAME>"},
 				Risk:         RiskWrite,
 			},
@@ -161,6 +195,25 @@ func dbSchemaList() Command {
 				Title:        "what is inside an instance",
 				Command:      "outplane db database list orders",
 				Argv:         []string{"outplane", "db", "database", "list", "orders"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
+				Risk:         RiskRead,
+			},
+			{
+				Title:        "read the names and owners in a pipeline",
+				Command:      "outplane db database list orders --json --fields name,owner",
+				Argv:         []string{"outplane", "db", "database", "list", "orders", "--json", "--fields", "name,owner"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{
+					"items":     []any{map[string]any{"name": "main", "owner": "app"}},
+					"total":     1,
+					"truncated": false,
+				},
+			},
+			{
+				Title:        "check what a role owns before removing it",
+				Command:      "outplane db database list orders -o text",
+				Argv:         []string{"outplane", "db", "database", "list", "orders", "-o", "text"},
 				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
 				Risk:         RiskRead,
 			},
@@ -225,7 +278,21 @@ func dbSchemaCreate() Command {
 				Placeholders: map[string]string{"orders": "<DATABASE_NAME>", "checkout": "<NAME>"},
 				Risk:         RiskWrite,
 			},
-		},
+			{
+				Title:        "check the request without creating anything",
+				Command:      "outplane db database create orders checkout --owner checkout --dry-run --json",
+				Argv:         []string{"outplane", "db", "database", "create", "orders", "checkout", "--owner", "checkout", "--dry-run", "--json"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>", "checkout": "<NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"kind": "database", "name": "checkout", "owner": "checkout", "changed": false},
+			},
+			{
+				Title:        "create one and read the result",
+				Command:      "outplane db database create orders checkout --owner checkout --json --fields name,owner,changed",
+				Argv:         []string{"outplane", "db", "database", "create", "orders", "checkout", "--owner", "checkout", "--json", "--fields", "name,owner,changed"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>", "checkout": "<NAME>"},
+				Risk:         RiskWrite,
+			}},
 
 		AutomationNotes: []string{
 			"The owner must already exist. Create the role first when a service should own " +
@@ -305,6 +372,14 @@ func insideDelete(kind, short, long string) Command {
 				Argv:         []string{"outplane", "db", kind, "delete", "orders", "old", "--yes", "--confirm-name", "old"},
 				Placeholders: map[string]string{"orders": "<DATABASE_NAME>", "old": "<NAME>"},
 				Risk:         RiskDestructive,
+			},
+			{
+				Title:        "read what the name resolves to, before confirming",
+				Command:      "outplane db " + kind + " delete orders old --dry-run --json",
+				Argv:         []string{"outplane", "db", kind, "delete", "orders", "old", "--dry-run", "--json"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>", "old": "<NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"kind": kind, "name": "old", "changed": false},
 			},
 		},
 

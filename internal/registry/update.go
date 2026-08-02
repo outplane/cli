@@ -82,6 +82,18 @@ func update() Command {
 				Argv:    []string{"outplane", "update"},
 				Risk:    RiskWrite,
 			},
+			{
+				Title:   "read the version and channel in a script",
+				Command: "outplane update --check --json --fields version,method",
+				Argv:    []string{"outplane", "update", "--check", "--json", "--fields", "version,method"},
+				Risk:    RiskRead,
+			},
+			{
+				Title:   "update to the newest release",
+				Command: "outplane update",
+				Argv:    []string{"outplane", "update"},
+				Risk:    RiskWrite,
+			},
 		},
 
 		AutomationNotes: []string{

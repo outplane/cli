@@ -81,7 +81,13 @@ func deployLogs() Command {
 				Placeholders: map[string]string{"4821": "<DEPLOYMENT_ID>"},
 				Risk:         RiskRead,
 			},
-		},
+			{
+				Title:        "search a finished build's output",
+				Command:      "outplane deploy logs 4821 -o text",
+				Argv:         []string{"outplane", "deploy", "logs", "4821", "-o", "text"},
+				Placeholders: map[string]string{"4821": "<DEPLOYMENT_ID>"},
+				Risk:         RiskRead,
+			}},
 
 		AutomationNotes: []string{
 			"Output is the build text, written to stdout as it arrives. It is not JSON, " +
