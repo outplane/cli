@@ -187,6 +187,37 @@ main() {
 		;;
 	esac
 
+	# Teach whatever coding agent is on this machine, by default.
+	#
+	# The skill is what makes an agent use this CLI correctly rather than guess
+	# at it, and somebody who has just installed the CLI is exactly the person
+	# who wants it. It is a suggestion away from being missed entirely, so it
+	# happens here, and OUTPLANE_SKIP_SKILLS turns it off for anyone who would
+	# rather their editor's configuration were left alone.
+	#
+	# A failure is reported and then forgotten: the CLI is installed either way,
+	# and an install script that fails at the last step over an optional extra
+	# has told the user their install failed when it did not.
+	skills_note=""
+	if [ -z "${OUTPLANE_SKIP_SKILLS:-}" ]; then
+		if "$dir/$BINARY" skills install >/dev/null 2>&1; then
+			skills_note="installed"
+		else
+			skills_note="skipped"
+		fi
+	fi
+
+	case "$skills_note" in
+	installed)
+		say ""
+		say "Taught your coding agent to use Out Plane. Restart it to load the skill."
+		;;
+	skipped)
+		say ""
+		say "Using a coding agent? Teach it Out Plane: $BINARY skills install"
+		;;
+	esac
+
 	say ""
 	say "Next: $BINARY login"
 }

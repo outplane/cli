@@ -13,6 +13,7 @@ import (
 	"github.com/outplane/cli/internal/config"
 	"github.com/outplane/cli/internal/core"
 	"github.com/outplane/cli/internal/output"
+	"github.com/outplane/cli/internal/skills"
 	"github.com/pkg/browser"
 	"golang.org/x/term"
 )
@@ -88,6 +89,7 @@ func login(ctx context.Context, req Request) (output.Table, error) {
 	}
 
 	cli.Out.Note("Signed in to %s.", slug)
+	suggestSkill(req)
 
 	return output.Table{
 		Single:  true,
@@ -389,4 +391,37 @@ func daysLeftValue(expiresAt string, days int) any {
 		return nil
 	}
 	return days
+}
+
+// suggestSkill mentions the agent skill once, to somebody who just signed in.
+//
+// Signing in is the moment a person is setting the CLI up, and it is the only
+// moment they are certain to pass through whichever way they installed it. The
+// note is a suggestion and never an action: writing into somebody's coding tool
+// because they signed in would be a surprise, and a surprise in a home directory
+// is the kind users do not forgive.
+//
+// Silent when there is no coding tool to teach, when the skill is already
+// installed, and when --quiet was asked for. Out.Note already writes to stderr,
+// so this cannot corrupt a piped result.
+func suggestSkill(req Request) {
+	if req.CLI.Exec.CI || req.CLI.Exec.AgentHarness != "" {
+		return
+	}
+	agents := skills.Detect()
+	if len(agents) == 0 {
+		return
+	}
+	for _, agent := range agents {
+		dir, err := agent.SkillsDir(false)
+		if err != nil {
+			continue
+		}
+		// Installed anywhere is enough. Somebody who already has it does not
+		// need telling again because a second tool is also on the machine.
+		if _, installed := skills.Installed(dir); installed {
+			return
+		}
+	}
+	req.CLI.Out.Note("Teach your coding agent to use Out Plane: outplane skills install")
 }
