@@ -84,14 +84,22 @@ jobs:
           sed -i 's|\./||' checksums.txt
           cat checksums.txt
 
+      # Re-runnable, because the reason to re-run is that something after this
+      # step failed. A release that already exists has its assets replaced
+      # rather than the workflow stopping on a name that is taken.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            dist/* install.sh
+          set -eu
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* install.sh --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              dist/* install.sh
+          fi
 
       # Six platform packages and one wrapper. The wrapper depends on all six
       # optionally, with os and cpu set, so npm installs exactly the one that
@@ -179,9 +187,23 @@ jobs:
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_ORG_SECRET }}
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
           set -eu
+
+          # A version already on the registry is skipped rather than retried.
+          # npm refuses to republish one, and this workflow has to survive being
+          # run again after failing part way: that is what a re-run is for.
+          publish() {
+            name=$(node -p "require('./package.json').name")
+            if npm view "${name}@${VERSION}" version >/dev/null 2>&1; then
+              echo "${name}@${VERSION} is already published"
+              return
+            fi
+            npm publish --access public
+          }
+
           for dir in npm-dist/cli-*; do
-            (cd "$dir" && npm publish --access public)
+            (cd "$dir" && publish)
           done
-          (cd npm-dist/cli && npm publish --access public)
+          (cd npm-dist/cli && publish)
