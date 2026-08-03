@@ -22,10 +22,14 @@ Downloads the binary for your platform, checks it against the release's own
 checksums, and puts it in `/usr/local/bin` when that is writable or
 `~/.local/bin` when it is not. It never asks for `sudo`.
 
+It also installs the [agent skill](https://github.com/outplane/skills) into any
+coding tool it finds, so an agent knows how to use this CLI rather than guessing
+at it. `OUTPLANE_SKIP_SKILLS=1` leaves your editor's configuration alone.
+
 Pin a version, or choose where it goes:
 
 ```bash
-OUTPLANE_VERSION=v0.1.0 OUTPLANE_INSTALL_DIR=~/bin \
+OUTPLANE_VERSION=v0.2.3 OUTPLANE_INSTALL_DIR=~/bin \
   sh -c "$(curl -fsSL https://outplane.com/install.sh)"
 ```
 
@@ -34,6 +38,9 @@ OUTPLANE_VERSION=v0.1.0 OUTPLANE_INSTALL_DIR=~/bin \
 ```bash
 npm i -g outplane
 ```
+
+This package installs the binary and nothing else, with no install script, so
+the agent skill is a separate step there: `outplane skills install`.
 
 **Anywhere else**
 
@@ -68,7 +75,7 @@ by its owner, and `outplane status` says which of the two answered.
 
 ## What it covers
 
-81 commands. `outplane --help` lists them, and every one has its own help with
+85 commands. `outplane --help` lists them, and every one has its own help with
 runnable examples.
 
 | Group | What it does |
@@ -86,6 +93,7 @@ runnable examples.
 | `logs`, `requests`, `metrics` | what an application is printing, serving and using |
 | `login`, `logout`, `team`, `link`, `unlink` | which credential, which team, which application a command acts on |
 | `status`, `whoami`, `repos` | what is in effect right now, and where it came from |
+| `skills` | install the agent skill into your coding tools, and keep it current |
 | `update` | replace this binary with the newest release |
 | `api` | any endpoint the CLI has no command for yet |
 
@@ -134,6 +142,20 @@ npm verified is what runs.
 
 Every release publishes all seven at the same version, alongside the archives
 and checksums on the [releases page](https://github.com/outplane/cli/releases).
+
+## For coding agents
+
+There is a skill that teaches an agent this CLI: which command answers which
+question, what needs a deployment and what does not, and why a destructive
+command hands back an invocation instead of asking.
+
+```bash
+outplane skills install
+```
+
+It is installed by the shell installer already, and it is open source at
+[outplane/skills](https://github.com/outplane/skills). It also installs through
+a plugin marketplace or `npx skills add outplane/skills`.
 
 ## Documentation
 

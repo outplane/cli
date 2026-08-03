@@ -37,12 +37,26 @@ by its owner, and `outplane status` says which of the two answered.
 
 ## What it covers
 
-81 commands, over applications, deployments, environment variables, ports,
+85 commands, over applications, deployments, environment variables, ports,
 build settings, custom domains, volumes, managed PostgreSQL, IP access
 profiles, registry credentials, logs, requests and metrics.
 
 `outplane --help` lists them. Every one has its own help, with runnable
 examples.
+
+## Teach your coding agent
+
+```bash
+outplane skills install
+```
+
+Installs a skill that tells an agent which command answers which question, what
+needs a deployment and what does not, and why a destructive command hands back
+an invocation instead of asking. It is open source at
+[outplane/skills](https://github.com/outplane/skills).
+
+This package installs the binary and nothing else, with no install script, so
+unlike the shell installer it does not do this for you.
 
 ## For AI agents and CI
 
