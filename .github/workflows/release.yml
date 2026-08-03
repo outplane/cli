@@ -144,7 +144,11 @@ jobs:
           mkdir -p npm-dist/cli/bin
           cp npm/bin/outplane npm-dist/cli/bin/outplane
           chmod +x npm-dist/cli/bin/outplane
-          cp README.md LICENSE npm-dist/cli/
+          # The package page has its own README: somebody arriving from npm has
+          # already chosen the channel, and the first thing they need is not a
+          # list of the other ones.
+          cp npm/README.md npm-dist/cli/README.md
+          cp LICENSE npm-dist/cli/
 
           cat > npm-dist/cli/package.json <<EOF
           {
