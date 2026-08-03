@@ -19,10 +19,19 @@ func init() {
 }
 
 // insideArgs are the two positionals: which instance, and which thing in it.
+//
+// The instance is already called `database`, so a database inside one cannot be
+// called that as well: `db database create <DATABASE> <DATABASE>` is a usage
+// line that tells a reader nothing, and tells a caller reading the schema less.
+// Handlers read positionals by index, so the name here is a label only.
 func insideArgs(kind string) []Arg {
+	name := kind
+	if name == "database" {
+		name = "name"
+	}
 	return []Arg{
 		dbArg(),
-		{Name: kind, Short: "the " + kind + "'s name", Required: true},
+		{Name: name, Short: "the " + kind + "'s name", Required: true},
 	}
 }
 
