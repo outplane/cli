@@ -292,7 +292,7 @@ func describe(c registry.Command) CommandDoc {
 	for _, e := range c.Examples {
 		doc.Examples = append(doc.Examples, ExampleDoc{
 			Title:        e.Title,
-			Command:      e.Command,
+			Command:      e.CommandLine(),
 			Argv:         e.Argv,
 			Risk:         riskName(e.Risk),
 			Placeholders: e.Placeholders,

@@ -295,3 +295,55 @@ func TestEveryCommandPointsAtDocumentation(t *testing.T) {
 		}
 	}
 }
+
+// An example has to render as something a person can copy.
+//
+// Command and Argv are the same invocation written twice, and the four `skills`
+// examples shipped with only Argv. Nothing failed: the help printed a blank line
+// where the command should be, and the documentation published an empty code
+// block, which is the kind of defect that survives review because there is
+// nothing on the page to notice. CommandLine derives the missing half; this
+// makes sure both halves are actually there to derive from, and that they agree
+// about which command is being demonstrated.
+func TestExamplesRenderSomethingRunnable(t *testing.T) {
+	for _, c := range Commands {
+		path := strings.Join(c.Path, " ")
+		t.Run(path, func(t *testing.T) {
+			for i, ex := range c.Examples {
+				if len(ex.Argv) == 0 {
+					t.Errorf("example %d (%q) has no argv, which is what an agent executes", i, ex.Title)
+					continue
+				}
+				if ex.Argv[0] != "outplane" {
+					t.Errorf("example %d (%q) does not start with outplane", i, ex.Title)
+				}
+
+				line := ex.CommandLine()
+				if strings.TrimSpace(line) == "" {
+					t.Errorf("example %d (%q) renders as an empty line", i, ex.Title)
+					continue
+				}
+
+				// The two forms must demonstrate the same command, or the page
+				// shows one thing and the agent runs another. Contains rather
+				// than a prefix: some examples are deliberately shown inside a
+				// shell, as a pipeline or a command substitution, and the bare
+				// invocation is what argv carries.
+				want := "outplane " + path
+				if !strings.Contains(line, want) {
+					t.Errorf("example %d renders as %q, which is not an example of %q", i, line, want)
+				}
+				if len(ex.Argv) < len(c.Path)+1 {
+					t.Errorf("example %d has argv %v, too short to be %q", i, ex.Argv, want)
+					continue
+				}
+				for j, segment := range c.Path {
+					if ex.Argv[j+1] != segment {
+						t.Errorf("example %d argv is %v, which is not %q", i, ex.Argv, want)
+						break
+					}
+				}
+			}
+		})
+	}
+}

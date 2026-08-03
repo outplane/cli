@@ -27,6 +27,11 @@
 // loop that anyone can read top to bottom.
 package registry
 
+import (
+	"strconv"
+	"strings"
+)
+
 // Risk classifies what a command can do to the user's resources. It drives
 // three separate things, which is why it is a first-class field rather than a
 // comment:
@@ -328,6 +333,31 @@ type Field struct {
 // It carries two forms of the same thing on purpose: Command is what a human
 // copies out of the help text, Argv is what an agent executes directly with no
 // shell tokenization step. Keeping them in one struct means they cannot drift.
+// CommandLine is the example as somebody would type it.
+//
+// Command and Argv are the same invocation written twice, and the four `skills`
+// examples shipped with only the second: the documentation renders Command, so
+// every one of them published an empty code block. Deriving it when it is
+// missing means the two cannot disagree by omission. Command is still allowed,
+// because a few examples read better with quoting a naive join would not
+// produce.
+func (e Example) CommandLine() string {
+	if e.Command != "" {
+		return e.Command
+	}
+	parts := make([]string, 0, len(e.Argv))
+	for _, a := range e.Argv {
+		// Quote what a shell would otherwise split or interpret, so the line
+		// stays copy-and-paste correct.
+		if a == "" || strings.ContainsAny(a, " \t\"'$&|;<>()*?") {
+			parts = append(parts, strconv.Quote(a))
+			continue
+		}
+		parts = append(parts, a)
+	}
+	return strings.Join(parts, " ")
+}
+
 type Example struct {
 	// Title says what the example accomplishes, in the user's terms.
 	// "Deploy and wait for it to finish", not "Use the --wait flag".

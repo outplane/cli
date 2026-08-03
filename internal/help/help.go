@@ -114,7 +114,7 @@ func Render(w io.Writer, c registry.Command, globalFlags []registry.Flag) {
 				p.line("")
 			}
 			p.line("  # " + e.Title)
-			p.line("  " + e.Command)
+			p.line("  " + e.CommandLine())
 		}
 	}
 
