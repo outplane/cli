@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+// The npm entry point: finds the binary for this machine and runs it.
+//
+// npm is how the CLI reaches Windows, where a shell installer would need a
+// PowerShell twin to keep correct. It works on macOS and Linux too, for anybody
+// whose team already installs its tools this way.
+//
+// The binaries live in six platform packages, `@outplane/cli-<os>-<arch>`, and
+// this package depends on all six as optional dependencies with `os` and `cpu`
+// set. npm installs only the one that matches, refuses none of the others out
+// loud, and needs no postinstall script to download anything: a package that
+// fetches a binary after install is a package whose integrity check covers
+// nothing. Whatever npm verified is what runs.
+//
+// This process stays alive around the real one rather than replacing itself,
+// because Node has no exec. What that costs is one process; what it must not
+// cost is behaviour, so the three streams are inherited rather than piped, and
+// the exit status and the signal that ended it are both passed on. A terminal
+// handed to `outplane app shell` reaches the binary this way, unchanged.
+
+const { spawnSync } = require("node:child_process")
+
+const PLATFORMS = {
+  "darwin-x64": "@outplane/cli-darwin-amd64",
+  "darwin-arm64": "@outplane/cli-darwin-arm64",
+  "linux-x64": "@outplane/cli-linux-amd64",
+  "linux-arm64": "@outplane/cli-linux-arm64",
+  "win32-x64": "@outplane/cli-windows-amd64",
+  "win32-arm64": "@outplane/cli-windows-arm64",
+}
+
+function binary() {
+  const key = `${process.platform}-${process.arch}`
+  const pkg = PLATFORMS[key]
+
+  if (!pkg) {
+    fail(
+      `The Out Plane CLI does not ship a binary for ${key}.`,
+      "It is built for macOS, Linux and Windows, on amd64 and arm64.",
+    )
+  }
+
+  const name = process.platform === "win32" ? "outplane.exe" : "outplane"
+  try {
+    return require.resolve(`${pkg}/bin/${name}`)
+  } catch {
+    // npm skipped it, or the install was copied to a machine of another kind.
+    // Reinstalling is the fix, and saying which package is missing is what
+    // makes that a one-line answer rather than a search.
+    fail(
+      `${pkg} is not installed, so there is no binary for ${key}.`,
+      "Reinstall with: npm install -g outplane",
+    )
+  }
+}
+
+function fail(...lines) {
+  for (const line of lines) console.error(line)
+  process.exit(1)
+}
+
+const result = spawnSync(binary(), process.argv.slice(2), { stdio: "inherit" })
+
+if (result.error) {
+  fail(`The Out Plane CLI could not be started: ${result.error.message}`)
+}
+
+// A process killed by a signal has no exit code of its own, and reporting 0
+// for one would tell a script the opposite of what happened. 128 plus the
+// signal number is what a shell reports, so it is what this reports.
+if (result.signal) {
+  const { constants } = require("node:os")
+  process.exit(128 + (constants.signals[result.signal] ?? 0))
+}
+
+process.exit(result.status ?? 1)

@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/outplane/cli/internal/clierr"
 	"github.com/outplane/cli/internal/config"
+	"github.com/outplane/cli/internal/core"
 	"github.com/outplane/cli/internal/output"
 	"github.com/pkg/browser"
 	"golang.org/x/term"
@@ -38,10 +40,10 @@ const consoleTokensPath = "/settings/api-tokens"
 // token the request had no job left. It did catch a revoked token a few seconds
 // earlier than the first real command would, which is not worth a network
 // dependency on the one command a new user runs first.
-func login(_ context.Context, req Request) (output.Table, error) {
+func login(ctx context.Context, req Request) (output.Table, error) {
 	cli := req.CLI
 
-	token, err := readToken(req)
+	token, err := readToken(ctx, req)
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -101,7 +103,7 @@ func login(_ context.Context, req Request) (output.Table, error) {
 }
 
 // readToken obtains the token, by whichever route the environment allows.
-func readToken(req Request) (string, error) {
+func readToken(ctx context.Context, req Request) (string, error) {
 	// An explicit flag wins, though the help text discourages it: argv is
 	// visible in process lists and CI logs.
 	if v := strings.TrimSpace(req.Flags.String("token")); v != "" {
@@ -122,8 +124,63 @@ func readToken(req Request) (string, error) {
 			WithStep("or skip signing in entirely", "OUTPLANE_TOKEN=<TOKEN>", "outplane", "app", "list")
 	}
 
-	openConsole(req)
+	// The console can hand the token over directly, which is the whole point:
+	// nobody copies a secret, so nobody leaves one in a clipboard or a
+	// scrollback. --no-browser opts out, and so does a machine with no browser
+	// to open.
+	if !req.Flags.Bool("no-browser") && req.CLI.Exec.CanOpenBrowser() {
+		if token, ok := waitForBrowser(ctx, req); ok {
+			return token, nil
+		}
+		// Falling through is deliberate. A browser that opened behind the
+		// terminal, or a tab somebody closed, should not end the command: the
+		// console is already showing the token page and a paste still works.
+	}
+
+	openConsole(req, "")
 	return promptForToken(req.CLI.Out)
+}
+
+// waitForBrowser signs in through the console, with no copying.
+//
+// It reports whether it worked rather than returning an error, because every
+// way it can fail has the same answer: ask for a paste instead. A port that
+// will not open, a browser that never came back, a tab that was closed. None of
+// those is worth ending the command over, and each one prints its own line
+// before the prompt appears.
+func waitForBrowser(ctx context.Context, req Request) (string, bool) {
+	// The console is the only page allowed to deliver, and which console that
+	// is follows the configured API address rather than being assumed.
+	listener, err := core.Listen(consoleURL(req.CLI.Config.APIURL.Value))
+	if err != nil {
+		req.CLI.Out.Note("%v", clierr.AsError(err).Message)
+		return "", false
+	}
+	defer listener.Close()
+
+	openConsole(req, browserQuery(listener))
+	req.CLI.Out.Note("Waiting for the browser. Approve there, and this finishes by itself.")
+
+	token, err := listener.Wait(ctx)
+	if err != nil {
+		e := clierr.AsError(err)
+		if e != nil && e.Kind == clierr.KindInterrupted {
+			return "", false
+		}
+		req.CLI.Out.Note("The browser did not answer.")
+		return "", false
+	}
+	return token, true
+}
+
+// browserQuery is what the console needs to answer this process rather than
+// another one, and to name the machine in what it shows.
+func browserQuery(listener *core.Loopback) string {
+	values := url.Values{}
+	values.Set("cli_callback", listener.CallbackURL())
+	values.Set("state", listener.State())
+	values.Set("cli_name", defaultTokenName())
+	return "?" + values.Encode()
 }
 
 // readTokenFromStdin reads a token piped in, tolerating a trailing newline.
@@ -146,11 +203,15 @@ func readTokenFromStdin() (string, error) {
 // common failures make that worth the extra line: the browser opens in a
 // profile signed in as somebody else, or it opens behind the terminal and the
 // user never sees it. In both cases a visible URL is the only recovery.
-func openConsole(req Request) {
-	url := consoleURL(req.CLI.Config.APIURL.Value) + consoleTokensPath
+func openConsole(req Request, query string) {
+	target := consoleURL(req.CLI.Config.APIURL.Value) + consoleTokensPath + query
 
-	req.CLI.Out.Note("Create a token here, then paste it below:")
-	req.CLI.Out.Note("  %s", url)
+	if query == "" {
+		req.CLI.Out.Note("Create a token here, then paste it below:")
+	} else {
+		req.CLI.Out.Note("Approve the sign-in here:")
+	}
+	req.CLI.Out.Note("  %s", target)
 	req.CLI.Out.Note("")
 
 	if req.Flags.Bool("no-browser") || !req.CLI.Exec.CanOpenBrowser() {
@@ -158,7 +219,7 @@ func openConsole(req Request) {
 	}
 	// A browser that will not open is not an error: the URL is already on
 	// screen and the user can open it themselves.
-	_ = browser.OpenURL(url)
+	_ = browser.OpenURL(target)
 }
 
 // consoleURL derives the console host from the API host, so that a local or

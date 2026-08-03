@@ -36,7 +36,11 @@ func login() Command {
 			"It goes into this machine's keychain. Where there is none, which is every " +
 			"container and most headless servers, it goes into a file readable only by " +
 			"its owner and `outplane status` says so. In CI, set OUTPLANE_TOKEN instead " +
-			"and nothing is written down at all.",
+			"and nothing is written down at all.\n\n" +
+			"By default the console hands the token over directly: this opens a browser, " +
+			"you approve there, and nothing is copied. Where that cannot work, and with " +
+			"--no-browser, it falls back to printing the page address and reading a " +
+			"pasted token.",
 
 		Risk: RiskWrite,
 		// The whole point of this command is to obtain a credential, so it
@@ -65,10 +69,11 @@ func login() Command {
 					"or set OUTPLANE_TOKEN and skip signing in altogether",
 			},
 			{
-				Name:        "no-browser",
-				Type:        "bool",
-				Default:     "false",
-				Description: "print the console URL instead of opening it",
+				Name:    "no-browser",
+				Type:    "bool",
+				Default: "false",
+				Description: "print the console URL and read a pasted token, instead of " +
+					"opening a browser and having the token handed over",
 			},
 		},
 
@@ -79,8 +84,10 @@ func login() Command {
 			{Name: "changed", Type: "bool", Description: "false when this credential was already stored"},
 		},
 
-		ErrorCodes: []string{"auth.token_malformed", "auth.token_pre_slug"},
-		ExitCodes:  []int{0, 2},
+		ErrorCodes: []string{
+			"auth.loopback_unavailable",
+			"auth.loopback_timeout", "auth.token_malformed", "auth.token_pre_slug"},
+		ExitCodes: []int{0, 2},
 
 		Examples: []Example{
 			{
@@ -110,6 +117,13 @@ func login() Command {
 			}},
 
 		AutomationNotes: []string{
+			"On a machine with a browser this opens one and waits: the console posts the " +
+				"token to a listener on 127.0.0.1, so nothing is copied and nothing " +
+				"reaches the screen. A port that will not open, a browser that never " +
+				"answers within three minutes, or --no-browser all fall back to reading a " +
+				"pasted token, and none of them is an error.",
+			"The listener accepts one delivery, only from 127.0.0.1, and only when it " +
+				"carries back the one-time value this process generated.",
 			"In CI, do not sign in. Set OUTPLANE_TOKEN and every command will use it; " +
 				"the token names its own team.",
 			"A token belongs to one team. Signing in again adds a second credential " +

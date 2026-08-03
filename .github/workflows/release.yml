@@ -1,0 +1,187 @@
+# Cutting a release.
+#
+# One tag produces everything: six binaries, their checksums, a GitHub release
+# carrying the install script, and seven npm packages. Nothing here is done by
+# hand afterwards, because a release assembled half by a workflow and half by a
+# person is a release that differs between one version and the next.
+#
+# The tag is the version. v0.2.0 builds a CLI that reports 0.2.0, and there is
+# no second place to update.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CGO_ENABLED: "0"
+
+jobs:
+  build:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Read the version from the tag
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Everything below is built from this one loop, so a target cannot be
+      # released in one form and forgotten in the other.
+      - name: Build every target
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -eu
+          mkdir -p dist
+
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            name="outplane"
+            [ "$os" = "windows" ] && name="outplane.exe"
+
+            out="build/${os}_${arch}"
+            mkdir -p "$out"
+
+            # -s -w drop the symbol table and DWARF: nothing debugs a released
+            # binary from a stack trace, and it is a third of the size.
+            GOOS=$os GOARCH=$arch go build \
+              -trimpath \
+              -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "$out/$name" ./cmd/outplane
+
+            archive="outplane_${GITHUB_REF_NAME}_${os}_${arch}"
+            if [ "$os" = "windows" ]; then
+              (cd "$out" && zip -q "../../dist/${archive}.zip" "$name")
+            else
+              tar -czf "dist/${archive}.tar.gz" -C "$out" "$name"
+            fi
+          done
+
+      # The install script verifies against this before running anything it
+      # downloaded, so it ships with the release rather than alongside it.
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum ./* > checksums.txt
+          # sha256sum writes "./name"; the install script greps for " name".
+          sed -i 's|\./||' checksums.txt
+          cat checksums.txt
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/* install.sh
+
+      # Six platform packages and one wrapper. The wrapper depends on all six
+      # optionally, with os and cpu set, so npm installs exactly the one that
+      # matches and nothing has to download anything after the fact.
+      - name: Assemble the npm packages
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          set -eu
+
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            name="outplane"
+            [ "$os" = "windows" ] && name="outplane.exe"
+
+            # npm's own names for the same things.
+            npm_os=$os
+            [ "$os" = "windows" ] && npm_os="win32"
+            npm_cpu=$arch
+            [ "$arch" = "amd64" ] && npm_cpu="x64"
+
+            pkg="npm-dist/cli-${os}-${arch}"
+            mkdir -p "$pkg/bin"
+            cp "build/${os}_${arch}/$name" "$pkg/bin/$name"
+            chmod +x "$pkg/bin/$name"
+
+            cat > "$pkg/package.json" <<EOF
+          {
+            "name": "@outplane/cli-${os}-${arch}",
+            "version": "${VERSION}",
+            "description": "Out Plane CLI binary for ${os} ${arch}",
+            "license": "Apache-2.0",
+            "repository": { "type": "git", "url": "git+https://github.com/outplane/cli.git" },
+            "os": ["${npm_os}"],
+            "cpu": ["${npm_cpu}"],
+            "files": ["bin"]
+          }
+          EOF
+          done
+
+          mkdir -p npm-dist/cli/bin
+          cp npm/bin/outplane npm-dist/cli/bin/outplane
+          chmod +x npm-dist/cli/bin/outplane
+          cp README.md LICENSE npm-dist/cli/
+
+          cat > npm-dist/cli/package.json <<EOF
+          {
+            "name": "outplane",
+            "version": "${VERSION}",
+            "description": "Deploy and operate applications on Out Plane",
+            "license": "Apache-2.0",
+            "repository": { "type": "git", "url": "git+https://github.com/outplane/cli.git" },
+            "homepage": "https://docs.outplane.com/cli",
+            "bin": { "outplane": "bin/outplane" },
+            "files": ["bin", "README.md", "LICENSE"],
+            "engines": { "node": ">=18" },
+            "optionalDependencies": {
+              "@outplane/cli-darwin-amd64": "${VERSION}",
+              "@outplane/cli-darwin-arm64": "${VERSION}",
+              "@outplane/cli-linux-amd64": "${VERSION}",
+              "@outplane/cli-linux-arm64": "${VERSION}",
+              "@outplane/cli-windows-amd64": "${VERSION}",
+              "@outplane/cli-windows-arm64": "${VERSION}"
+            }
+          }
+          EOF
+
+      # A rehearsal first. A token that cannot publish, or a name that is not
+      # ours, fails here rather than after three packages are already public
+      # and the fourth is not.
+      - name: Check the packages would publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_ORG_SECRET }}
+        run: |
+          set -eu
+          for dir in npm-dist/cli-*; do
+            (cd "$dir" && npm publish --dry-run --access public)
+          done
+          (cd npm-dist/cli && npm publish --dry-run --access public)
+
+      # The platform packages go first. The wrapper depends on them, and a
+      # wrapper published against versions that do not exist yet is an install
+      # that fails for whoever is quickest.
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_ORG_SECRET }}
+        run: |
+          set -eu
+          for dir in npm-dist/cli-*; do
+            (cd "$dir" && npm publish --access public)
+          done
+          (cd npm-dist/cli && npm publish --access public)

@@ -1,0 +1,114 @@
+# What has to hold before anything is merged.
+#
+# Everything here runs in seconds and each job answers one question that a
+# person cannot reliably answer by reading. The build matrix is the largest of
+# them and it is not optional: this CLI ships six binaries, and a change that
+# compiles on the machine it was written on can still fail on Windows, where the
+# only thing that differs is a build tag nobody looked at.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A second push to the same branch makes the first run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every binary this project ships is static. See the hard rule in go.mod.
+  CGO_ENABLED: "0"
+
+jobs:
+  check:
+    name: Format, vet and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # gofmt has no exit code for "would reformat", so the check is whether it
+      # named any files at all.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+  build:
+    name: Build every target
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { os: darwin, arch: amd64 }
+          - { os: darwin, arch: arm64 }
+          - { os: linux, arch: amd64 }
+          - { os: linux, arch: arm64 }
+          - { os: windows, arch: amd64 }
+          - { os: windows, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.target.os }}
+          GOARCH: ${{ matrix.target.arch }}
+        run: go build -o /dev/null ./...
+
+  cgo:
+    name: No cgo anywhere
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A dependency that pulls in cgo turns the binary dynamic, which breaks
+      # the `FROM scratch` and Alpine cases that decided the language. It
+      # arrives silently, through a transitive dependency somebody added for
+      # something else, so it is checked rather than remembered.
+      - name: Look for cgo in the dependency tree
+        run: |
+          offenders=$(go list -deps ./... | xargs go list -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}')
+          if [ -n "$offenders" ]; then
+            echo "These packages use cgo:"
+            echo "$offenders"
+            exit 1
+          fi
+
+  script:
+    name: Install script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The install script runs as root on other people's machines, through a
+      # pipe, before anybody has read it. It gets linted.
+      - name: shellcheck
+        run: shellcheck install.sh
