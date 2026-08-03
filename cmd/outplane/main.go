@@ -343,10 +343,22 @@ func childOrGroup(parent *cobra.Command, name string) *cobra.Command {
 // The path matters, not just the last word. A group can be nested, and matching
 // on the leaf name alone made `outplane env group --help` look for commands
 // beginning "group", find none, and call itself `outplane group`.
+// plural makes a group name read as a category.
+//
+// Naive concatenation produced "skillss", and a group whose name is already
+// plural is not a special case worth a table: an English word that ends in s is
+// left alone, and everything else takes one.
+func plural(word string) string {
+	if strings.HasSuffix(word, "s") {
+		return word
+	}
+	return word + "s"
+}
+
 func printGroupHelp(w interface{ Write([]byte) (int, error) }, path []string) {
 	group := strings.Join(path, " ")
 
-	fmt.Fprintf(w, "Commands for managing %ss.\n\n", path[len(path)-1])
+	fmt.Fprintf(w, "Commands for managing %s.\n\n", plural(path[len(path)-1]))
 	fmt.Fprintln(w, "USAGE")
 	fmt.Fprintf(w, "  outplane %s <command> [flags]\n", group)
 	fmt.Fprintln(w)
