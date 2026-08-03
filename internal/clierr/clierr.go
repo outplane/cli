@@ -55,31 +55,17 @@ const (
 //
 // These values are a public contract. Append only. Never reuse a number and
 // never change what one means: callers pin them in scripts we cannot see.
+//
+// Read from the table in table.go, which is the only place the numbers are
+// written down. A kind with no entry there is a kind nobody documented, and 1
+// is what an undocumented failure is.
 func (k Kind) ExitCode() int {
-	switch k {
-	case KindUsage:
-		return 2
-	case KindAuth:
-		return 3
-	case KindConfirmation:
-		return 4
-	case KindNotFound:
-		return 5
-	case KindConflict:
-		return 6
-	case KindQuota:
-		return 7
-	case KindUpstream:
-		return 8
-	case KindUpgradeRequired:
-		return 9
-	case KindTimeout:
-		return 124
-	case KindInterrupted:
-		return 130
-	default:
-		return 1
+	for _, e := range ExitCodes() {
+		if e.Kind == string(k) {
+			return e.Code
+		}
 	}
+	return 1
 }
 
 // Retryable reports whether trying the same thing again could plausibly work.
@@ -89,7 +75,12 @@ func (k Kind) ExitCode() int {
 // plan limit". An agent that treats it as backpressure will retry forever
 // against a wall.
 func (k Kind) Retryable() bool {
-	return k == KindUpstream || k == KindTimeout
+	for _, e := range ExitCodes() {
+		if e.Kind == string(k) {
+			return e.Retryable
+		}
+	}
+	return false
 }
 
 // Step is a suggested next action.

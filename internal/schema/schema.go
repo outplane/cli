@@ -18,6 +18,7 @@
 package schema
 
 import (
+	"github.com/outplane/cli/internal/clierr"
 	"github.com/outplane/cli/internal/registry"
 )
 
@@ -386,19 +387,26 @@ func globalArgs() []Arg {
 // Exit codes are a public contract: append only, never reused, never
 // redefined. A caller that learned them from an old release must not be
 // silently wrong against a new one.
+//
+// Read from the one table rather than repeated here. The copy that used to
+// live in this function had already lost exit code 9, so a caller reading the
+// schema could not learn about a failure `outplane help exit-codes` printed.
+// Code 0 is left out: it is a success, not a kind.
 func errorKinds() []ErrorKind {
-	return []ErrorKind{
-		{"usage", 2, false, "Invalid arguments, unknown flag, or client-side validation failure."},
-		{"auth", 3, false, "Not authenticated, token revoked or expired, or forbidden for this team."},
-		{"confirmation_required", 4, false, "A destructive operation stopped. Replay the command in confirm_command."},
-		{"not_found", 5, false, "The named resource does not exist, or is not visible to this credential."},
-		{"conflict", 6, false, "The resource already exists, or a concurrent change won."},
-		{"quota", 7, false, "Plan limit reached or payment required. Not a rate limit; retrying will not help."},
-		{"upstream", 8, true, "The Out Plane API returned a server error."},
-		{"timeout", 124, true, "A client-side deadline expired. The server operation may still be running."},
-		{"interrupted", 130, false, "Cancelled by the user."},
-		{"internal", 1, false, "An unexpected failure in the CLI itself."},
+	table := clierr.ExitCodes()
+	kinds := make([]ErrorKind, 0, len(table))
+	for _, e := range table {
+		if e.Kind == "" {
+			continue
+		}
+		kinds = append(kinds, ErrorKind{
+			Kind:        e.Kind,
+			ExitCode:    e.Code,
+			Retryable:   e.Retryable,
+			Description: e.Detail,
+		})
 	}
+	return kinds
 }
 
 func riskLevels() []RiskLevel {
