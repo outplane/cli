@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/outplane/cli/internal/clierr"
@@ -165,10 +166,18 @@ func (l *Loopback) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Not every browser sends an origin on a navigation, so this narrows rather
-	// than decides: a wrong one is refused, a missing one leaves the state to
-	// do the deciding.
-	if origin := r.Header.Get("Origin"); origin != "" && origin != l.origin {
+	// Not every browser sends a usable origin on a navigation, so this narrows
+	// rather than decides: a wrong one is refused, an absent one leaves the
+	// state to do the deciding.
+	//
+	// "null" counts as absent, and getting that wrong broke the flow in Chrome
+	// entirely. The console is https and this listener is http, so the request
+	// is a downgrade, and Fetch says a downgrade under the default referrer
+	// policy sends `Origin: null` rather than the real origin. That is the
+	// specified behaviour for exactly the flow this listener exists for, so
+	// treating it as a hostile origin refused the only browser doing the right
+	// thing.
+	if !l.originAllowed(r.Header.Get("Origin")) {
 		http.Error(w, "", http.StatusForbidden)
 		return
 	}
@@ -188,6 +197,31 @@ func (l *Loopback) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, signedInPage)
+}
+
+// originAllowed reports whether a delivery may proceed on its origin alone.
+//
+// Absent, and the literal "null", both mean the browser declined to name one.
+// Neither is evidence of anything, so both defer to the state, which is the
+// check that actually ties a delivery to this process.
+//
+// A named origin is compared as a URL rather than as text. The two forms differ
+// by a trailing slash more often than by a host, and refusing a token because a
+// string had one more character than another is a failure nobody can diagnose
+// from the outside.
+func (l *Loopback) originAllowed(origin string) bool {
+	if origin == "" || origin == "null" {
+		return true
+	}
+	got, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	want, err := url.Parse(l.origin)
+	if err != nil {
+		return false
+	}
+	return got.Scheme == want.Scheme && got.Host == want.Host
 }
 
 // signedInPage is what the browser shows afterwards.

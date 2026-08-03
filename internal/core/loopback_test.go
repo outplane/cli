@@ -203,3 +203,58 @@ func TestWaitStopsWhenTheCallerDoes(t *testing.T) {
 		t.Fatal("a cancelled wait returned a token")
 	}
 }
+
+// A downgrade from the https console to this http listener makes the browser
+// send `Origin: null` under the default referrer policy, which is what Fetch
+// specifies and what Chrome does. Refusing it refused the whole flow: the
+// console navigated to the listener, the listener answered 403, and the page
+// the person was left looking at was empty.
+func TestNullOriginIsAccepted(t *testing.T) {
+	l := listening(t)
+
+	if got := submit(t, l.CallbackURL(), "tok_test", l.State(), "null"); got != http.StatusOK {
+		t.Fatalf("a null origin was refused with %d; it is what a downgrade sends", got)
+	}
+	if token, err := l.Wait(context.Background()); err != nil || token != "tok_test" {
+		t.Fatalf("Wait = (%q, %v), want the delivered token", token, err)
+	}
+}
+
+// The comparison is on scheme and host, so the forms of one origin that differ
+// only in punctuation are the same origin.
+func TestOriginIsComparedAsAURL(t *testing.T) {
+	l := listening(t)
+
+	for _, same := range []string{testOrigin, testOrigin + "/"} {
+		if !l.originAllowed(same) {
+			t.Errorf("originAllowed(%q) = false, want true", same)
+		}
+	}
+
+	// Everything that is a different place stays refused. The state is the
+	// real gate, but an origin that names somebody else is still evidence.
+	for _, other := range []string{
+		"https://console.example.org",
+		"http://console.example.com",
+		"https://evil.console.example.com",
+		"https://console.example.com.evil.test",
+		"https://console.example.com:8443",
+		"::not a url",
+	} {
+		if l.originAllowed(other) {
+			t.Errorf("originAllowed(%q) = true, want false", other)
+		}
+	}
+}
+
+// An absent origin has always been allowed, and still is: the state decides.
+func TestAbsentOriginStillDefersToTheState(t *testing.T) {
+	l := listening(t)
+
+	if got := submit(t, l.CallbackURL(), "tok_test", "not-the-state", ""); got != http.StatusForbidden {
+		t.Fatalf("a wrong state with no origin got %d, want 403", got)
+	}
+	if got := submit(t, l.CallbackURL(), "tok_test", l.State(), ""); got != http.StatusOK {
+		t.Fatalf("the right state with no origin got %d, want 200", got)
+	}
+}
