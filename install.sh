@@ -78,7 +78,11 @@ latest() {
 		die "could not reach GitHub to find the newest release"
 
 	tag=${url##*/}
-	[ -n "$tag" ] && [ "$tag" != "releases" ] || die "could not work out the newest version"
+	# "releases" is what the last segment is when GitHub did not redirect,
+	# which is what a repository with no release at all looks like.
+	if [ -z "$tag" ] || [ "$tag" = "releases" ]; then
+		die "could not work out the newest version"
+	fi
 	printf '%s' "$tag"
 }
 
