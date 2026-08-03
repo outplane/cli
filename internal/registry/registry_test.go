@@ -273,3 +273,25 @@ func TestMutatingCommandsCanBeTriedFirst(t *testing.T) {
 		t.Errorf("%s: mutating, not exempt, and has no --dry-run", path)
 	}
 }
+
+// Every command needs a documentation address.
+//
+// It is declared by hand on each command rather than derived, and the four
+// `skills` commands shipped without one: the field is optional in the struct, so
+// nothing complained until the documentation generator, which groups pages by
+// that address, met a command that had none. The cost of forgetting is a command
+// whose help points nowhere, which is invisible until somebody follows it.
+func TestEveryCommandPointsAtDocumentation(t *testing.T) {
+	const prefix = "https://docs.outplane.com/cli"
+
+	for _, c := range Commands {
+		path := strings.Join(c.Path, " ")
+		if c.DocsURL == "" {
+			t.Errorf("%s: no DocsURL", path)
+			continue
+		}
+		if !strings.HasPrefix(c.DocsURL, prefix) {
+			t.Errorf("%s: DocsURL %q does not start with %s", path, c.DocsURL, prefix)
+		}
+	}
+}

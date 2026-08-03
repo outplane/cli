@@ -118,6 +118,8 @@ func skillsInstall() Command {
 		ExitCodes: []int{0, 1, 2, 5, 8},
 
 		Related: []string{"skills list", "skills update", "skills remove"},
+
+		DocsURL: "https://docs.outplane.com/cli/skills",
 	}
 }
 
@@ -174,6 +176,8 @@ func skillsList() Command {
 		ExitCodes:  []int{0, 1, 2, 5},
 
 		Related: []string{"skills install", "skills update", "skills remove"},
+
+		DocsURL: "https://docs.outplane.com/cli/skills",
 	}
 }
 
@@ -232,6 +236,8 @@ func skillsUpdate() Command {
 		ExitCodes: []int{0, 1, 2, 5, 8},
 
 		Related: []string{"skills install", "skills list", "skills remove"},
+
+		DocsURL: "https://docs.outplane.com/cli/skills",
 	}
 }
 
@@ -286,5 +292,7 @@ func skillsRemove() Command {
 		ExitCodes:  []int{0, 1, 2},
 
 		Related: []string{"skills install", "skills list", "skills update"},
+
+		DocsURL: "https://docs.outplane.com/cli/skills",
 	}
 }
