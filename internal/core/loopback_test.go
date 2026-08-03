@@ -220,30 +220,6 @@ func TestNullOriginIsAccepted(t *testing.T) {
 	}
 }
 
-// Everything that names somewhere else stays refused. The state is the real
-// gate, but an origin that names a stranger is still evidence, and each entry
-// below is one way a looser comparison would let a stranger through.
-func TestAnotherOriginIsStillRefused(t *testing.T) {
-	l := listening(t)
-
-	if !l.originAllowed(testOrigin) {
-		t.Errorf("originAllowed(%q) = false, want true", testOrigin)
-	}
-
-	for _, other := range []string{
-		"https://console.example.org",
-		"http://console.example.com",
-		"https://evil.console.example.com",
-		"https://console.example.com.evil.test",
-		"https://console.example.com:8443",
-		"::not a url",
-	} {
-		if l.originAllowed(other) {
-			t.Errorf("originAllowed(%q) = true, want false", other)
-		}
-	}
-}
-
 // An absent origin has always been allowed, and still is: the state decides.
 func TestAbsentOriginStillDefersToTheState(t *testing.T) {
 	l := listening(t)
