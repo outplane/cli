@@ -220,19 +220,16 @@ func TestNullOriginIsAccepted(t *testing.T) {
 	}
 }
 
-// The comparison is on scheme and host, so the forms of one origin that differ
-// only in punctuation are the same origin.
-func TestOriginIsComparedAsAURL(t *testing.T) {
+// Everything that names somewhere else stays refused. The state is the real
+// gate, but an origin that names a stranger is still evidence, and each entry
+// below is one way a looser comparison would let a stranger through.
+func TestAnotherOriginIsStillRefused(t *testing.T) {
 	l := listening(t)
 
-	for _, same := range []string{testOrigin, testOrigin + "/"} {
-		if !l.originAllowed(same) {
-			t.Errorf("originAllowed(%q) = false, want true", same)
-		}
+	if !l.originAllowed(testOrigin) {
+		t.Errorf("originAllowed(%q) = false, want true", testOrigin)
 	}
 
-	// Everything that is a different place stays refused. The state is the
-	// real gate, but an origin that names somebody else is still evidence.
 	for _, other := range []string{
 		"https://console.example.org",
 		"http://console.example.com",

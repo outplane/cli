@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/outplane/cli/internal/clierr"
@@ -203,25 +202,15 @@ func (l *Loopback) handle(w http.ResponseWriter, r *http.Request) {
 //
 // Absent, and the literal "null", both mean the browser declined to name one.
 // Neither is evidence of anything, so both defer to the state, which is the
-// check that actually ties a delivery to this process.
+// check that actually ties a delivery to this process. "null" is what a browser
+// sends when the request downgrades from the https console to this http
+// listener, which is every successful sign-in, so refusing it refused the flow.
 //
-// A named origin is compared as a URL rather than as text. The two forms differ
-// by a trailing slash more often than by a host, and refusing a token because a
-// string had one more character than another is a failure nobody can diagnose
-// from the outside.
+// Compared as text because the header is already a serialised origin: scheme,
+// host, and a port when there is one. A browser does not send a trailing slash
+// or a second spelling, and there is exactly one console to compare against.
 func (l *Loopback) originAllowed(origin string) bool {
-	if origin == "" || origin == "null" {
-		return true
-	}
-	got, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	want, err := url.Parse(l.origin)
-	if err != nil {
-		return false
-	}
-	return got.Scheme == want.Scheme && got.Host == want.Host
+	return origin == "" || origin == "null" || origin == l.origin
 }
 
 // signedInPage is what the browser shows afterwards.
