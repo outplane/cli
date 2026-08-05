@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -40,9 +41,25 @@ const (
 	// seahorse, so it is the product's name rather than a package path.
 	keyringService = "outplane"
 
-	// keyringUser names the one entry. It is not a username: this store holds
+	// keyringUser names the first entry. It is not a username: this store holds
 	// every team's credential in one document.
 	keyringUser = "credentials"
+
+	// keyringChunk is how much of the document goes in one entry.
+	//
+	// Every keychain has a ceiling and they are lower than they look. Windows
+	// refuses a value over 2560 bytes outright. macOS builds a shell command to
+	// write the entry and refuses the whole command over 4096, so the ceiling
+	// there is really that minus the command around it. A document holding a
+	// few teams' tokens passes both, which is how this was found: the entry was
+	// written for months and then one more sign-in made it unwritable, on the
+	// machine that had used it most.
+	//
+	// So the document is split across entries and joined on the way back. The
+	// size is chosen to clear the lower of the two ceilings with room to spare,
+	// and it bounds nothing else: a document twice as long simply takes twice
+	// as many entries.
+	keyringChunk = 2000
 )
 
 // store is where the credential document is read from and written to.
@@ -85,24 +102,74 @@ func credentialStore() store {
 // keyringStore keeps the document in the operating system's own secret store.
 type keyringStore struct{}
 
-func (keyringStore) load() ([]byte, error) {
-	secret, err := keyring.Get(keyringService, keyringUser)
-	if err != nil {
-		return nil, err
+// chunkAccount names the nth entry.
+//
+// The first keeps the original name, so a document written by an earlier
+// release is read back by this one without a migration: it is simply a document
+// that happened to fit in one entry.
+func chunkAccount(n int) string {
+	if n == 0 {
+		return keyringUser
 	}
-	return []byte(secret), nil
+	return fmt.Sprintf("%s.%d", keyringUser, n)
+}
+
+func (keyringStore) load() ([]byte, error) {
+	var document []byte
+	for n := 0; ; n++ {
+		part, err := keyring.Get(keyringService, chunkAccount(n))
+		if errors.Is(err, keyring.ErrNotFound) {
+			// Missing the first entry means there is nothing stored at all.
+			// Missing a later one means the document ended.
+			if n == 0 {
+				return nil, err
+			}
+			return document, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		document = append(document, part...)
+	}
 }
 
 func (keyringStore) save(document []byte) error {
-	return keyring.Set(keyringService, keyringUser, string(document))
+	written := 0
+	for start := 0; start < len(document); start += keyringChunk {
+		end := min(start+keyringChunk, len(document))
+		if err := keyring.Set(keyringService, chunkAccount(written), string(document[start:end])); err != nil {
+			return err
+		}
+		written++
+	}
+	// An empty document still takes one entry, so that "stored, and empty" and
+	// "never stored" stay different answers.
+	if written == 0 {
+		if err := keyring.Set(keyringService, chunkAccount(0), ""); err != nil {
+			return err
+		}
+		written = 1
+	}
+
+	// A shorter document leaves entries behind, and a later load would read
+	// them as the tail of the new one. Signing out of a team has to shorten the
+	// document, so this is the ordinary case rather than an unlikely one.
+	return removeChunksFrom(written)
 }
 
-func (keyringStore) clear() error {
-	err := keyring.Delete(keyringService, keyringUser)
-	if errors.Is(err, keyring.ErrNotFound) {
-		return nil
+func (keyringStore) clear() error { return removeChunksFrom(0) }
+
+// removeChunksFrom deletes every entry from n onwards.
+func removeChunksFrom(n int) error {
+	for ; ; n++ {
+		err := keyring.Delete(keyringService, chunkAccount(n))
+		if errors.Is(err, keyring.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 	}
-	return err
 }
 
 func (keyringStore) where() string { return "keychain" }

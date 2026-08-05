@@ -1,10 +1,14 @@
 package config
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zalando/go-keyring"
 )
 
 // The store decides where a token lives, and getting it wrong either loses
@@ -168,4 +172,200 @@ func TestMigration(t *testing.T) {
 			t.Error("the file was removed with nowhere to move it to")
 		}
 	})
+}
+
+// ── keychain chunking ───────────────────────────────────────────────────────
+//
+// The document is split across keychain entries because every keychain has a
+// ceiling: Windows refuses a value over 2560 bytes, and macOS refuses the whole
+// shell command it builds over 4096. A document holding a few teams' tokens
+// clears both, right up until one more sign-in does not, which is how this was
+// found in the first place. These hold the split to the two things that matter:
+// what goes in comes back out, and no single entry is ever near a ceiling.
+
+// The lower of the two real ceilings. Anything written must clear it on every
+// platform, not just the one the tests happen to run on.
+const smallestKeychainCeiling = 2560
+
+// keychainSetup points the library at its in-memory provider and clears it.
+func keychainSetup(t *testing.T) {
+	t.Helper()
+	keyring.MockInit()
+	t.Cleanup(func() { _ = keyringStore{}.clear() })
+	_ = keyringStore{}.clear()
+}
+
+// document builds a payload of a known size, filled so a misjoined document is
+// visibly wrong rather than plausibly wrong.
+func document(size int) []byte {
+	out := make([]byte, size)
+	for i := range out {
+		out[i] = byte('a' + i%26)
+	}
+	return out
+}
+
+// entrySizes reports the length of every entry the store wrote.
+func entrySizes(t *testing.T) []int {
+	t.Helper()
+	var sizes []int
+	for n := 0; ; n++ {
+		value, err := keyring.Get(keyringService, chunkAccount(n))
+		if err != nil {
+			return sizes
+		}
+		sizes = append(sizes, len(value))
+	}
+}
+
+func TestKeychainRoundTripsEverySize(t *testing.T) {
+	// Around the boundary in both directions, plus a document far past it.
+	for _, size := range []int{
+		0, 1, 100,
+		keyringChunk - 1, keyringChunk, keyringChunk + 1,
+		2 * keyringChunk, 2*keyringChunk + 1,
+		10 * keyringChunk,
+	} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			keychainSetup(t)
+			want := document(size)
+
+			if err := (keyringStore{}).save(want); err != nil {
+				t.Fatalf("save: %v", err)
+			}
+			got, err := keyringStore{}.load()
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("round trip lost data: got %d bytes, want %d", len(got), len(want))
+			}
+
+			// The invariant that broke. Every entry has to clear the lowest
+			// ceiling of any platform, not the one running the test.
+			for i, size := range entrySizes(t) {
+				if size > smallestKeychainCeiling {
+					t.Errorf("entry %d is %d bytes, over the %d ceiling", i, size, smallestKeychainCeiling)
+				}
+			}
+		})
+	}
+}
+
+// A real document is a few teams' tokens, and it was exactly this size that
+// stopped being writable.
+func TestKeychainHoldsAPlausibleNumberOfTeams(t *testing.T) {
+	keychainSetup(t)
+
+	// Ten teams, each with a token far longer than one really is.
+	want := document(10 * 1200)
+	if err := (keyringStore{}).save(want); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := keyringStore{}.load()
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("load = (%d bytes, %v), want %d bytes", len(got), err, len(want))
+	}
+	for i, size := range entrySizes(t) {
+		if size > smallestKeychainCeiling {
+			t.Errorf("entry %d is %d bytes, over the %d ceiling", i, size, smallestKeychainCeiling)
+		}
+	}
+}
+
+// A document written by a release that knew nothing about chunking is one
+// entry, and has to load without a migration.
+func TestKeychainReadsALegacySingleEntry(t *testing.T) {
+	keychainSetup(t)
+
+	legacy := document(3679) // the size that first failed to save
+	if err := keyring.Set(keyringService, keyringUser, string(legacy)); err != nil {
+		t.Fatalf("seeding the legacy entry: %v", err)
+	}
+
+	got, err := keyringStore{}.load()
+	if err != nil || !bytes.Equal(got, legacy) {
+		t.Fatalf("load = (%d bytes, %v), want %d bytes", len(got), err, len(legacy))
+	}
+
+	// Saving over it splits it, and the oversized entry is gone.
+	if err := (keyringStore{}).save(legacy); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	for i, size := range entrySizes(t) {
+		if size > smallestKeychainCeiling {
+			t.Errorf("entry %d is still %d bytes", i, size)
+		}
+	}
+}
+
+// Signing out of a team shortens the document. A shorter document must not
+// leave the tail of a longer one behind, or the next load reads both.
+func TestKeychainDoesNotLeaveAStaleTail(t *testing.T) {
+	keychainSetup(t)
+
+	long := document(5 * keyringChunk)
+	if err := (keyringStore{}).save(long); err != nil {
+		t.Fatalf("save long: %v", err)
+	}
+	if n := len(entrySizes(t)); n != 5 {
+		t.Fatalf("wrote %d entries for a document of 5 chunks", n)
+	}
+
+	short := document(keyringChunk / 2)
+	if err := (keyringStore{}).save(short); err != nil {
+		t.Fatalf("save short: %v", err)
+	}
+	if n := len(entrySizes(t)); n != 1 {
+		t.Errorf("%d entries remain after shortening to one chunk", n)
+	}
+
+	got, err := keyringStore{}.load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !bytes.Equal(got, short) {
+		t.Fatalf("read back %d bytes, want %d: the tail of the longer document survived", len(got), len(short))
+	}
+}
+
+func TestKeychainClearRemovesEveryEntry(t *testing.T) {
+	keychainSetup(t)
+
+	if err := (keyringStore{}).save(document(4 * keyringChunk)); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if err := (keyringStore{}).clear(); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if n := len(entrySizes(t)); n != 0 {
+		t.Errorf("%d entries survived clear", n)
+	}
+	if _, err := (keyringStore{}).load(); !errors.Is(err, keyring.ErrNotFound) {
+		t.Errorf("load after clear = %v, want ErrNotFound", err)
+	}
+	// Clearing nothing is not an error, so a teardown can run unconditionally.
+	if err := (keyringStore{}).clear(); err != nil {
+		t.Errorf("clear on an empty keychain: %v", err)
+	}
+}
+
+// "Stored, and empty" and "never stored" are different answers, and the
+// difference decides whether the CLI thinks somebody is signed in.
+func TestKeychainTellsEmptyFromAbsent(t *testing.T) {
+	keychainSetup(t)
+
+	if _, err := (keyringStore{}).load(); !errors.Is(err, keyring.ErrNotFound) {
+		t.Fatalf("load on an empty keychain = %v, want ErrNotFound", err)
+	}
+	if err := (keyringStore{}).save(nil); err != nil {
+		t.Fatalf("save empty: %v", err)
+	}
+	got, err := keyringStore{}.load()
+	if err != nil {
+		t.Fatalf("load after saving empty: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("read back %d bytes after saving an empty document", len(got))
+	}
 }
