@@ -52,7 +52,7 @@ func update() Command {
 		OutputFields: []Field{
 			{Name: "method", Type: "string", Description: "npm | the install script | unknown"},
 			{Name: "path", Type: "string", Description: "the binary that would be replaced"},
-			{Name: "version", Type: "string", Description: "the version running now"},
+			{Name: "version", Type: "string | null", Description: "the version of the binary at path. After an update that is the new one, read back from disk; null when it could not be read"},
 			{
 				Name:        "command",
 				Type:        "string | null",

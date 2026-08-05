@@ -198,6 +198,20 @@ main() {
 	# A failure is reported and then forgotten: the CLI is installed either way,
 	# and an install script that fails at the last step over an optional extra
 	# has told the user their install failed when it did not.
+	# Teach whatever coding agent is on this machine, by default.
+	#
+	# The skill is what makes an agent use this CLI correctly rather than guess
+	# at it, and somebody who has just installed the CLI is exactly the person
+	# who wants it. `outplane update` re-runs this script, so the skill is
+	# brought to the current release every time the CLI is, which is the point:
+	# a skill a release behind describes a CLI that is no longer there.
+	#
+	# OUTPLANE_SKIP_SKILLS turns it off for anyone who would rather their
+	# editor's configuration were left alone.
+	#
+	# A failure is reported and then forgotten: the CLI is installed either way,
+	# and an install script that fails at the last step over an optional extra
+	# has told the user their install failed when it did not.
 	skills_note=""
 	if [ -z "${OUTPLANE_SKIP_SKILLS:-}" ]; then
 		if "$dir/$BINARY" skills install >/dev/null 2>&1; then

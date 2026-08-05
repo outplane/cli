@@ -815,10 +815,18 @@ func appInstances() Command {
 		OutputFields: []Field{
 			{Name: "name", Type: "string", Description: "the instance's own name, which changes on every restart"},
 			{
+				Name: "state",
+				Type: "string",
+				Description: "the platform's reading of the lifecycle, and the field to branch on: " +
+					"pending, starting, running, failing, terminating, terminated. An unrecognised " +
+					"one decodes to unknown:N, carrying the number the server sent",
+				Enum: []string{"pending", "starting", "running", "failing", "terminating", "terminated", "unknown"},
+			},
+			{
 				Name: "phase",
 				Type: "string",
-				Description: "the runtime's word for what it is doing, passed through unchanged: " +
-					"Pending, Running, Succeeded, Failed or Unknown",
+				Description: "the runtime's own word, passed through unchanged: Pending, Running, " +
+					"Succeeded, Failed or Unknown. Weaker than state, which separates starting from failing",
 			},
 			{
 				Name: "ready",
@@ -826,6 +834,40 @@ func appInstances() Command {
 				Description: "whether it is taking traffic. Running and not ready is the " +
 					"interesting state during a rollout",
 			},
+			{
+				Name: "restarts",
+				Type: "int",
+				Description: "how many times the container has restarted since the instance was " +
+					"created. The only field that shows a crash loop which has since recovered",
+			},
+			{
+				Name:        "reason",
+				Type:        "string | null",
+				Description: "why it is not up, in one sentence. Null while it is running or still starting",
+			},
+			{
+				Name:        "createdAt",
+				Type:        "string | null",
+				Description: "when the instance came into being. The only age an instance that never starts has",
+			},
+			{
+				Name: "startedAt",
+				Type: "string | null",
+				Description: "when the container running now started. After a restart this, not " +
+					"createdAt, is what \"up for\" measures from",
+			},
+			{
+				Name: "lastExitCode",
+				Type: "int | null",
+				Description: "what the previous container exited with, when there was one. The " +
+					"application's own code: 137 is a kill for exceeding the memory limit",
+			},
+			{
+				Name:        "deploymentId",
+				Type:        "int | null",
+				Description: "the deployment that put this instance here, so it can be traced to a row in deploy list",
+			},
+			{Name: "container", Type: "string", Description: "the container a shell attaches to"},
 			{Name: "container", Type: "string"},
 			{Name: "startedAt", Type: "string | null", Description: "RFC 3339, UTC"},
 		},
@@ -871,6 +913,10 @@ func appInstances() Command {
 			"phase comes from the container runtime and is passed through unchanged, so a " +
 				"value this release has never seen still arrives intact.",
 			"An instance name changes every time it restarts. Do not store one.",
+			"state is the field to branch on. phase is the runtime's raw word and cannot tell a container that is starting from one that keeps dying; state can.",
+			"createdAt and startedAt answer different questions. The first is how old the instance is, the second is how long the container running now has been up, and after a restart they are hours apart. \"Up for\" measures from startedAt.",
+			"restarts is the only field that shows a crash loop which has since recovered: an instance that restarted ten minutes ago and is running now reads healthy everywhere else.",
+			"lastExitCode is the application's own exit code, so it is safe to show a user. 137 means the container was killed for using more memory than it was allowed.",
 			"A paused application runs nothing, so this is empty and that is not an error.",
 		},
 

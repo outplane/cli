@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/outplane/cli/internal/clierr"
 	"github.com/outplane/cli/internal/install"
@@ -31,7 +32,7 @@ func update(ctx context.Context, req Request) (output.Table, error) {
 		// worse problem than the one being solved.
 		if check {
 			describe(req, method, req.CLI.Version())
-			return updateResult(method, req.CLI.Version(), false), nil
+			return updateResult(method, nilVersion(req.CLI.Version()), false), nil
 		}
 		return output.Table{}, clierr.New(clierr.KindUsage,
 			"this installation cannot be updated by the CLI").
@@ -43,7 +44,7 @@ func update(ctx context.Context, req Request) (output.Table, error) {
 	describe(req, method, req.CLI.Version())
 
 	if check {
-		return updateResult(method, req.CLI.Version(), false), nil
+		return updateResult(method, nilVersion(req.CLI.Version()), false), nil
 	}
 
 	if err := run(ctx, method); err != nil {
@@ -52,8 +53,57 @@ func update(ctx context.Context, req Request) (output.Table, error) {
 			WithHint("Run it directly to see what it reported: %s", method.Display)
 	}
 
-	req.CLI.Out.Note("Updated. Later commands will use the new version.")
-	return updateResult(method, req.CLI.Version(), true), nil
+	// The version to report is the one now on disk, not the one running this
+	// line. They differ by exactly the update that just happened, and printing
+	// the old number beside "ran: true" told a reader the update had not
+	// worked.
+	installed := installedVersion(ctx, method.Path)
+	if installed == "" {
+		req.CLI.Out.Note("Updated, though the new version could not be read back.")
+	} else {
+		req.CLI.Out.Note("Updated to %s. Later commands will use it.", installed)
+	}
+	return updateResult(method, nilVersion(installed), true), nil
+}
+
+// installedVersion asks the binary that later commands will run what it is.
+//
+// The one on PATH, not the one at the path this process was started from. The
+// installer puts the binary where it can write, which is usually the file that
+// was already there and occasionally is not: a copy run from somewhere else, or
+// a directory that stopped being writable. Reading the file this process came
+// from would then report the version that did not change, which is the mistake
+// this whole function exists to stop making.
+//
+// Empty when it cannot be read, which is reported rather than papered over with
+// the version of the process asking: a number that is confidently wrong is
+// worse than a missing one.
+func installedVersion(ctx context.Context, path string) string {
+	if onPath, err := exec.LookPath("outplane"); err == nil {
+		path = onPath
+	}
+	if path == "" {
+		return ""
+	}
+	out, err := exec.CommandContext(ctx, path, "version").Output()
+	if err != nil {
+		return ""
+	}
+	// `outplane 1.2.3`
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 {
+		return ""
+	}
+	return fields[len(fields)-1]
+}
+
+// nilVersion keeps an unreadable version out of the result as null rather than
+// as an empty string, so a caller branches on absence instead of on "".
+func nilVersion(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
 }
 
 // describe reports what was found, before anything is run.
@@ -79,7 +129,7 @@ func run(ctx context.Context, method install.Method) error {
 	return cmd.Run()
 }
 
-func updateResult(method install.Method, version string, ran bool) output.Table {
+func updateResult(method install.Method, version any, ran bool) output.Table {
 	return output.Table{
 		Single:  true,
 		Columns: []string{"method", "path", "version", "command", "ran"},

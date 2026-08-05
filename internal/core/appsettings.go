@@ -51,8 +51,38 @@ type Instance struct {
 	// not ready, which is exactly the state worth seeing during a rollout.
 	Ready bool `json:"ready"`
 
+	// State is the platform's own reading of the lifecycle, and the field to
+	// branch on. Phase is the runtime's raw word; this is what the platform
+	// makes of it, and it distinguishes "starting" from "failing", which phase
+	// alone cannot.
+	State string `json:"state"`
+
+	// RestartCount is how many times the container has restarted since the
+	// instance was created. It is the only field that shows a crash loop which
+	// has since recovered: everything else about that instance reads healthy.
+	RestartCount int `json:"restartCount"`
+
+	// Reason says why it is not up, in one sentence. Empty while it is running
+	// normally or simply still starting.
+	Reason string `json:"reason"`
+
 	Container string `json:"container"`
+
+	// CreatedAt is when the instance came into being, and StartedAt is when the
+	// container running now started. They are seconds apart on a healthy
+	// instance and hours apart on one that has restarted, which is the whole
+	// reason both are reported: "up for" measures from the second.
+	CreatedAt string `json:"createdAt"`
 	StartedAt string `json:"startedAt"`
+
+	// LastExitCode is what the previous container exited with, when there was
+	// one. It is the application's own code, so 137 means it was killed for
+	// using more memory than it was allowed.
+	LastExitCode *int `json:"lastExitCode"`
+
+	// DeploymentID ties an instance back to the row in `deploy list` that put
+	// it there. Zero on an instance older than the platform variables.
+	DeploymentID int `json:"deploymentId"`
 }
 
 type instanceDTO struct {
@@ -60,7 +90,38 @@ type instanceDTO struct {
 	Phase         string `json:"phase"`
 	Ready         bool   `json:"ready"`
 	ContainerName string `json:"containerName"`
-	StartTime     string `json:"startTime"`
+	CreatedAt     string `json:"createdAt"`
+	StartedAt     string `json:"startedAt"`
+	State         int    `json:"state"`
+	RestartCount  int    `json:"restartCount"`
+	Reason        string `json:"reason"`
+	LastExitCode  *int   `json:"lastExitCode"`
+	DeploymentID  int    `json:"deploymentId"`
+}
+
+// instanceStates is the platform's lifecycle vocabulary, by the number the API
+// sends. Spelled out rather than derived, because the numbers are a contract
+// and a gap in them is deliberate room to insert a state later.
+var instanceStates = map[int]string{
+	0:  "unknown",
+	10: "pending",
+	20: "starting",
+	30: "running",
+	40: "failing",
+	50: "terminating",
+	60: "terminated",
+}
+
+// instanceState names a state, and says plainly when it cannot.
+//
+// A number this release has never seen becomes "unknown:N" rather than a guess
+// or a blank. That is how a state added on the server reaches an older CLI: as
+// something visibly unrecognised, carrying the number somebody can look up.
+func instanceState(code int) string {
+	if name, ok := instanceStates[code]; ok {
+		return name
+	}
+	return fmt.Sprintf("unknown:%d", code)
 }
 
 // AppInstances lists what is currently running.
@@ -80,11 +141,17 @@ func AppInstances(ctx context.Context, c *api.Client, appID string) ([]Instance,
 	out := make([]Instance, 0, len(dtos))
 	for _, d := range dtos {
 		out = append(out, Instance{
-			Name:      d.Name,
-			Phase:     d.Phase,
-			Ready:     d.Ready,
-			Container: d.ContainerName,
-			StartedAt: serverInstant(d.StartTime),
+			Name:         d.Name,
+			Phase:        d.Phase,
+			Ready:        d.Ready,
+			State:        instanceState(d.State),
+			RestartCount: d.RestartCount,
+			Reason:       d.Reason,
+			Container:    d.ContainerName,
+			CreatedAt:    serverInstant(d.CreatedAt),
+			StartedAt:    serverInstant(d.StartedAt),
+			LastExitCode: d.LastExitCode,
+			DeploymentID: d.DeploymentID,
 		})
 	}
 	return out, nil

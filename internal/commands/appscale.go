@@ -214,22 +214,46 @@ func appInstances(ctx context.Context, req Request) (output.Table, error) {
 		return output.Table{}, err
 	}
 
+	// The columns are what a person scans down a list of instances: which one,
+	// what it is doing, whether it has been dying, and how long the thing
+	// running now has been up. Everything else is in the structured output.
 	table := output.Table{
-		Columns: []string{"name", "phase", "ready", "startedAt"},
+		Columns: []string{"name", "state", "ready", "restarts", "startedAt"},
 		Total:   len(instances),
 	}
+	restarted, failing := 0, 0
 	for _, i := range instances {
+		if i.RestartCount > 0 {
+			restarted++
+		}
+		if i.Reason != "" {
+			failing++
+		}
 		table.Rows = append(table.Rows, map[string]any{
-			"name":      i.Name,
-			"phase":     i.Phase,
-			"ready":     i.Ready,
-			"container": i.Container,
-			"startedAt": nilIfEmpty(i.StartedAt),
+			"name":         i.Name,
+			"state":        i.State,
+			"phase":        i.Phase,
+			"ready":        i.Ready,
+			"restarts":     i.RestartCount,
+			"reason":       nilIfEmpty(i.Reason),
+			"container":    i.Container,
+			"createdAt":    nilIfEmpty(i.CreatedAt),
+			"startedAt":    nilIfEmpty(i.StartedAt),
+			"lastExitCode": i.LastExitCode,
+			"deploymentId": nilIfZero(i.DeploymentID),
 		})
 	}
 
-	if len(instances) != app.Instances {
+	// A restart that has since recovered leaves an instance reading healthy in
+	// every other column, so the count is the only thing that shows it and it
+	// is worth saying out loud.
+	switch {
+	case len(instances) != app.Instances:
 		table.Footer = configuredCountNote(app, len(instances))
+	case failing > 0:
+		table.Footer = "An instance is not up. Read reason, then `outplane logs`."
+	case restarted > 0:
+		table.Footer = "Something here has restarted. lastExitCode says how it ended; 137 is out of memory."
 	}
 	return table, nil
 }
