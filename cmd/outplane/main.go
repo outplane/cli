@@ -188,6 +188,14 @@ func newRoot(exec *execctx.Context) *cobra.Command {
 	// The registry is the source of truth for the command tree. This loop is
 	// the whole of the wiring.
 	for _, decl := range registry.Commands {
+		// RootWired commands are declared in the registry so that the schema,
+		// the help listing and the docs know they exist, but they are built
+		// below, by hand, because they run before configuration and before a
+		// credential is resolved. Attaching them here as well would give cobra
+		// two commands with the same name.
+		if decl.RootWired {
+			continue
+		}
 		attach(root, decl, exec, &g)
 	}
 

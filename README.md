@@ -29,7 +29,7 @@ at it. `OUTPLANE_SKIP_SKILLS=1` leaves your editor's configuration alone.
 Pin a version, or choose where it goes:
 
 ```bash
-OUTPLANE_VERSION=v0.2.6 OUTPLANE_INSTALL_DIR=~/bin \
+OUTPLANE_VERSION=v0.2.7 OUTPLANE_INSTALL_DIR=~/bin \
   sh -c "$(curl -fsSL https://outplane.com/install.sh)"
 ```
 
@@ -75,8 +75,8 @@ by its owner, and `outplane status` says which of the two answered.
 
 ## What it covers
 
-85 commands. `outplane --help` lists them, and every one has its own help with
-runnable examples.
+`outplane --help` lists every command, and each one has its own help with
+runnable examples. `outplane schema` is the same surface as JSON.
 
 | Group | What it does |
 | --- | --- |
@@ -119,8 +119,10 @@ outplane app list --json --fields name,status
   command that would proceed, so the approval gate lives in your harness rather
   than in a terminal an agent does not have. Under an agent harness they refuse
   outright, whatever flags they are given.
-- **`--dry-run`** on every mutating command prints what would be sent, without
-  sending it.
+- **`--dry-run`** on every command that changes something on the platform
+  prints the request that would be sent, without sending it. The commands it
+  does not take are the ones that change only local session state, such as
+  `login` and `link`.
 
 ## Packages
 

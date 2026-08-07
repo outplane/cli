@@ -158,6 +158,21 @@ type Command struct {
 	// an idempotency key once the API supports one.
 	Idempotent bool
 
+	// RootWired means the command is declared here but built by hand on the
+	// cobra root instead of by the usual wiring loop.
+	//
+	// Four commands have to run before configuration is read and before a
+	// credential is resolved: schema, help, version and completion. That puts
+	// their execution outside the path that renders a failure, which is why
+	// main.go builds them itself. Leaving them undeclared, though, made them
+	// invisible: `outplane schema` published eighty five commands and was not
+	// one of them, so an agent could only discover the command that describes
+	// the CLI if it already knew the command existed.
+	//
+	// So the declaration lives here, where the schema, the help listing and the
+	// documentation all read from, and only the construction stays over there.
+	RootWired bool
+
 	// ── Behaviour ───────────────────────────────────────────────────────
 
 	// LongRunning means the command may block for minutes. The help renderer
