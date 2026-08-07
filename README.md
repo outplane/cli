@@ -29,7 +29,7 @@ at it. `OUTPLANE_SKIP_SKILLS=1` leaves your editor's configuration alone.
 Pin a version, or choose where it goes:
 
 ```bash
-OUTPLANE_VERSION=v0.2.7 OUTPLANE_INSTALL_DIR=~/bin \
+OUTPLANE_VERSION=v0.2.8 OUTPLANE_INSTALL_DIR=~/bin \
   sh -c "$(curl -fsSL https://outplane.com/install.sh)"
 ```
 

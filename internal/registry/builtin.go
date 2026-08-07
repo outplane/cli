@@ -149,7 +149,7 @@ func helpCommand() Command {
 		},
 
 		Related: []string{"schema"},
-		DocsURL: "https://docs.outplane.com/cli/errors",
+		DocsURL: "https://docs.outplane.com/cli/help",
 	}
 }
 
@@ -186,7 +186,7 @@ func versionCommand() Command {
 				Argv:    []string{"outplane", "version", "--json", "--fields", "version"},
 				Risk:    RiskRead,
 				OutputSample: map[string]any{
-					"version": "0.2.7",
+					"version": "0.2.8",
 				},
 			},
 			{
