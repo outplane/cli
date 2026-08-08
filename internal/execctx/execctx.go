@@ -140,23 +140,50 @@ func (c Context) Interactive() bool {
 	return c.StdinTTY && c.StdoutTTY && !c.CI && c.AgentHarness == ""
 }
 
+// containerMarkers are the files a container runtime leaves behind. A variable
+// rather than a constant so a test can point it somewhere that does not exist:
+// the check is otherwise unfalsifiable from inside a container, which is where
+// a contributor with a devcontainer runs the suite.
+var containerMarkers = []string{"/.dockerenv", "/run/.containerenv"}
+
 // CanOpenBrowser reports whether a browser-based login can be attempted.
 //
-// The failure mode this guards against is specific and bad: the browser flow
-// creates a real, full-power token before delivering it, so an attempt that
-// cannot complete leaves a live credential belonging to nobody. When in doubt,
-// we print paste instructions instead.
+// Deliberately not Interactive(). That answers a different question, which is
+// whether the CLI may print a prompt and wait for a keypress, and it excludes
+// agent harnesses because they hand out a pseudo-terminal with no keyboard
+// behind it. Nothing here is typed: the console mints the token when somebody
+// presses Approve and posts it straight to a loopback listener. Borrowing the
+// keyboard rule cost an agent the one step of a first deployment it could
+// otherwise have finished, and sent the person off to another window.
+//
+// What still has to hold is that a browser opened on this machine can reach
+// that listener, which is what the rest of these checks are about. An agent in
+// a container is refused for the same reason an SSH session is, and the reason
+// is not that it is an agent.
 func (c Context) CanOpenBrowser() bool {
-	if !c.Interactive() {
+	// Nobody is there to approve, so the browser would open into the void.
+	if c.CI {
+		return false
+	}
+	// A harness stands in for the terminal an agent does not have. Without one,
+	// a piped invocation is a script, and a script should not raise a window.
+	if c.AgentHarness == "" && !(c.StdinTTY && c.StdoutTTY) {
 		return false
 	}
 	// An SSH session has a terminal, but the browser would open on the wrong
-	// machine.
+	// machine, and the listener is on this one.
 	if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" {
 		return false
 	}
-	// A container has no browser and usually no display.
-	if _, err := os.Stat("/.dockerenv"); err == nil {
+	// A container has no browser and usually no display. Two markers, because
+	// one runtime writes each, and neither is written by the other.
+	for _, marker := range containerMarkers {
+		if _, err := os.Stat(marker); err == nil {
+			return false
+		}
+	}
+	// A pod, which writes no marker file at all.
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
 		return false
 	}
 	// On Linux, no display server means no browser.

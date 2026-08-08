@@ -84,10 +84,18 @@ func login() Command {
 			{Name: "changed", Type: "bool", Description: "false when this credential was already stored"},
 		},
 
+		// What the command can actually return, which is not what this said.
+		//
+		// Two of the codes here were the loopback's, and the loopback's failures
+		// never reach a caller: they are reported as a note and the command falls
+		// back to a paste. Two that do reach a caller were missing, one of them
+		// the terminal error an agent sees. Exit 1 was missing too, and storing a
+		// credential can fail. An agent branching on this contract was branching
+		// on codes that never arrive and had no case for the ones that do.
 		ErrorCodes: []string{
-			"auth.loopback_unavailable",
-			"auth.loopback_timeout", "auth.token_malformed", "auth.token_pre_slug"},
-		ExitCodes: []int{0, 2},
+			"auth.no_terminal", "auth.token_missing",
+			"auth.token_malformed", "auth.token_pre_slug"},
+		ExitCodes: []int{0, 1, 2, 130},
 
 		Examples: []Example{
 			{

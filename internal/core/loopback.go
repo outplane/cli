@@ -46,12 +46,22 @@ import (
 // operation in the usual sense, but the cost of getting it right is one function
 // call and the cost of reasoning about whether it matters is larger.
 
-// loopbackTimeout is how long the browser has to answer.
+// LoopbackTimeout is how long the browser has to answer.
 //
 // Long enough to sign in to the console first, create the token and read what
 // is being approved. Short enough that a forgotten terminal does not hold a
 // port open all afternoon.
-const loopbackTimeout = 3 * time.Minute
+const LoopbackTimeout = 3 * time.Minute
+
+// AgentLoopbackTimeout is the same wait when a coding agent is driving.
+//
+// Shorter, and not for the user's sake. The console mints the token when
+// Approve is pressed and posts it afterwards, so an approval that lands after
+// this process has gone creates a live credential nobody receives and nobody
+// can revoke from here. Agent harnesses kill a command on their own schedule,
+// commonly at two minutes, and a CLI that outlives its own listener cannot even
+// report what happened. Ending first keeps the last word.
+const AgentLoopbackTimeout = 90 * time.Second
 
 // Loopback is a listener waiting for one token.
 type Loopback struct {
@@ -122,12 +132,20 @@ func (l *Loopback) State() string { return l.state }
 // somewhere the user did not see. The caller falls back to asking for a paste,
 // so this reports plainly rather than dramatically.
 func (l *Loopback) Wait(ctx context.Context) (string, error) {
+	return l.WaitFor(ctx, LoopbackTimeout)
+}
+
+// WaitFor is Wait with the deadline named by the caller.
+func (l *Loopback) WaitFor(ctx context.Context, timeout time.Duration) (string, error) {
+	if timeout <= 0 {
+		timeout = LoopbackTimeout
+	}
 	select {
 	case token := <-l.tokens:
 		return token, nil
 	case <-ctx.Done():
 		return "", clierr.New(clierr.KindInterrupted, "interrupted")
-	case <-time.After(loopbackTimeout):
+	case <-time.After(timeout):
 		return "", clierr.New(clierr.KindTimeout, "the browser did not answer").
 			WithCode("auth.loopback_timeout")
 	}

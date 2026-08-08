@@ -116,63 +116,88 @@ func readToken(ctx context.Context, req Request) (string, error) {
 		return readTokenFromStdin()
 	}
 
-	// Without a terminal there is nobody to prompt. Say so, rather than
-	// hanging on a read that will never return.
-	if !req.CLI.Exec.Interactive() {
-		return "", clierr.New(clierr.KindUsage, "no terminal available to prompt for a token").
-			WithCode("auth.no_terminal").
-			WithHint("Signing in needs either a terminal or an explicit token.").
-			WithStep("pipe a token in", "cat", "token.txt", "|", "outplane", "login", "--token-stdin").
-			WithStep("or skip signing in entirely", "OUTPLANE_TOKEN=<TOKEN>", "outplane", "app", "list")
-	}
-
 	// The console can hand the token over directly, which is the whole point:
 	// nobody copies a secret, so nobody leaves one in a clipboard or a
 	// scrollback. --no-browser opts out, and so does a machine with no browser
 	// to open.
+	//
+	// Tried before the terminal is required, because it needs no terminal. The
+	// order used to be the other way round, which meant an agent was turned
+	// away with auth.no_terminal without the browser ever being offered, even
+	// on a desktop where it would have worked and where somebody was watching.
 	if !req.Flags.Bool("no-browser") && req.CLI.Exec.CanOpenBrowser() {
-		if token, ok := waitForBrowser(ctx, req); ok {
+		token, err := waitForBrowser(ctx, req)
+		if err != nil {
+			return "", err
+		}
+		if token != "" {
 			return token, nil
 		}
-		// Falling through is deliberate. A browser that opened behind the
-		// terminal, or a tab somebody closed, should not end the command: the
-		// console is already showing the token page and a paste still works.
+		// Falling through is deliberate, and only useful where there is somebody
+		// to paste: a browser that opened behind the terminal, or a tab somebody
+		// closed, should not end the command while the console is still showing
+		// the token page. Where there is no terminal the next check ends it, and
+		// that is the right ending rather than a missed one.
 	}
 
-	openConsole(req, "")
+	// Everything left asks somebody to type. Without a terminal there is nobody
+	// to prompt, so say that rather than hanging on a read that never returns.
+	if !req.CLI.Exec.Interactive() {
+		return "", clierr.New(clierr.KindUsage, "no terminal available to prompt for a token").
+			WithCode("auth.no_terminal").
+			WithHint("Signing in needs a browser on this machine, a terminal, or an explicit token.").
+			WithStep("pipe a token in", "cat", "token.txt", "|", "outplane", "login", "--token-stdin").
+			WithStep("or skip signing in entirely", "OUTPLANE_TOKEN=<TOKEN>", "outplane", "app", "list")
+	}
+
+	_ = openConsole(req, "")
 	return promptForToken(req.CLI.Out)
 }
 
 // waitForBrowser signs in through the console, with no copying.
 //
-// It reports whether it worked rather than returning an error, because every
-// way it can fail has the same answer: ask for a paste instead. A port that
-// will not open, a browser that never came back, a tab that was closed. None of
-// those is worth ending the command over, and each one prints its own line
-// before the prompt appears.
-func waitForBrowser(ctx context.Context, req Request) (string, bool) {
+// Three outcomes rather than two. A token is success. An error is the caller's
+// to return, and there is one: a cancelled wait, which used to be swallowed and
+// then reported as "no terminal available", so a command somebody interrupted
+// on purpose blamed their environment. Everything else returns nothing at all
+// and means "try the other way": a port that will not open, a browser that
+// never came back, a tab that was closed. Each prints its own line first.
+func waitForBrowser(ctx context.Context, req Request) (string, error) {
 	// The console is the only page allowed to deliver, and which console that
 	// is follows the configured API address rather than being assumed.
 	listener, err := core.Listen(consoleURL(req.CLI.Config.APIURL.Value))
 	if err != nil {
 		req.CLI.Out.Note("%v", clierr.AsError(err).Message)
-		return "", false
+		return "", nil
 	}
 	defer listener.Close()
 
-	openConsole(req, browserQuery(listener))
-	req.CLI.Out.Note("Waiting for the browser. Approve there, and this finishes by itself.")
+	// A launcher that reported failure did not raise anything, so there is
+	// nothing on its way back and no reason to hold the port. Waiting out the
+	// full deadline for a browser that never started is the whole deadline
+	// spent on a certainty.
+	if !openConsole(req, browserQuery(listener)) {
+		req.CLI.Out.Note("No browser could be opened. Use the address above.")
+		return "", nil
+	}
 
-	token, err := listener.Wait(ctx)
+	timeout := core.LoopbackTimeout
+	if req.CLI.Exec.AgentHarness != "" {
+		timeout = core.AgentLoopbackTimeout
+	}
+	req.CLI.Out.Note("Waiting for the browser, up to %.0f seconds. Approve there, and this "+
+		"finishes by itself.", timeout.Seconds())
+
+	token, err := listener.WaitFor(ctx, timeout)
 	if err != nil {
 		e := clierr.AsError(err)
 		if e != nil && e.Kind == clierr.KindInterrupted {
-			return "", false
+			return "", err
 		}
 		req.CLI.Out.Note("The browser did not answer.")
-		return "", false
+		return "", nil
 	}
-	return token, true
+	return token, nil
 }
 
 // browserQuery is what the console needs to answer this process rather than
@@ -205,7 +230,9 @@ func readTokenFromStdin() (string, error) {
 // common failures make that worth the extra line: the browser opens in a
 // profile signed in as somebody else, or it opens behind the terminal and the
 // user never sees it. In both cases a visible URL is the only recovery.
-func openConsole(req Request, query string) {
+// openConsole prints the address and raises a browser at it, reporting whether
+// the browser was actually launched.
+func openConsole(req Request, query string) bool {
 	target := consoleURL(req.CLI.Config.APIURL.Value) + consoleTokensPath + query
 
 	if query == "" {
@@ -217,11 +244,15 @@ func openConsole(req Request, query string) {
 	req.CLI.Out.Note("")
 
 	if req.Flags.Bool("no-browser") || !req.CLI.Exec.CanOpenBrowser() {
-		return
+		return false
 	}
 	// A browser that will not open is not an error: the URL is already on
 	// screen and the user can open it themselves.
-	_ = browser.OpenURL(target)
+	//
+	// The result is reported anyway. When no launcher exists at all the answer
+	// is immediate and certain, and waiting three minutes for a browser that
+	// was never raised is three minutes of a caller's turn spent on nothing.
+	return browser.OpenURL(target) == nil
 }
 
 // consoleURL derives the console host from the API host, so that a local or
