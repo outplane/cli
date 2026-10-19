@@ -371,7 +371,7 @@ func noteAffectedApps(req Request, profile core.IPProfile) {
 
 func noteIPRules(req Request, profile core.IPProfile) {
 	if len(profile.Rules) == 0 {
-		req.CLI.Out.Note("  no rules: nothing would be allowed through")
+		req.CLI.Out.Note("  no rules: this profile restricts nothing")
 		return
 	}
 	for _, r := range profile.Rules {
@@ -435,7 +435,7 @@ func ipProfileTable(p core.IPProfile, changed bool) output.Table {
 // ipRuleFooter says what the numbers do not.
 func ipRuleFooter(p core.IPProfile) string {
 	if len(p.Rules) == 0 {
-		return "It has no rules. An application it is assigned to is reachable from nowhere."
+		return "It has no rules, so it restricts nothing. An application with only this profile is reachable from anywhere."
 	}
 
 	parts := make([]string, 0, len(p.Rules))

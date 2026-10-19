@@ -185,9 +185,9 @@ func ipProfileGet() Command {
 			"The id inside assignedApps is the assignment's own id, not the application's. " +
 				"It is what the platform removes an attachment by, and `ip-profile " +
 				"unassign` looks it up rather than asking for it.",
-			"An empty ruleList on an attached profile means the application is reachable " +
-				"from nowhere, which is a working configuration and almost never the " +
-				"intended one.",
+			"An empty ruleList restricts nothing. An application whose only attached " +
+				"profile is empty stays reachable from anywhere, exactly as with no profile, " +
+				"which is almost never the intended configuration.",
 			"Two requests, not one: the API addresses profiles by id, so a name has to be " +
 				"resolved against the list first.",
 		},
@@ -269,10 +269,10 @@ func ipProfileCreate() Command {
 		},
 
 		AutomationNotes: []string{
-			"A profile with no rules is accepted and allows nothing. Assigned to an " +
-				"application, it makes that application reachable from nowhere. " +
-				"--rule \"\" on its own is how to ask for that, the same way an empty " +
-				"value clears a build filter.",
+			"A profile with no rules is accepted and restricts nothing. Assigned on its own, " +
+				"the application stays reachable from anywhere; next to other profiles it adds " +
+				"no address. --rule \"\" on its own is how to ask for an empty profile, the " +
+				"same way an empty value clears a build filter.",
 			"A bare address is refused with ipprofile.cidr_invalid rather than being read " +
 				"as a /32, because guessing a prefix length is guessing how much of a " +
 				"network to let in.",
@@ -548,8 +548,9 @@ func ipProfileAssign() Command {
 				"soon as the request returns.",
 			"Idempotent. Attaching something already attached reports changed false and " +
 				"exits 0.",
-			"A profile with no rules makes the application reachable from nowhere. The " +
-				"request is not refused, and the result reports rules 0.",
+			"A profile with no rules restricts nothing: if it is the only one attached, the " +
+				"application stays reachable from anywhere. The request is not refused, and " +
+				"the result reports rules 0.",
 			"More than one profile can be attached to the same application. They add up: " +
 				"an address allowed by any attached profile gets through.",
 		},
