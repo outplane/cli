@@ -300,9 +300,9 @@ var HangarAgents = []string{"codex", "claude-code", "pi", "omp", "devin", "openc
 // the console's form makes.
 var DefaultHangarAgents = []string{"claude-code", "codex"}
 
-// HangarIdleTimeouts are the idle timeouts a new Hangar may choose, in minutes.
-// Never is always allowed besides these.
-var HangarIdleTimeouts = []int{30}
+// HangarIdleTimeouts are the idle timeouts a Hangar may have, in minutes, at
+// creation and afterwards. Never is always allowed besides these.
+var HangarIdleTimeouts = []int{15, 30, 60, 120, 360, 720, 1440}
 
 // NewHangar is everything needed to create a Hangar.
 type NewHangar struct {
@@ -422,12 +422,35 @@ func CheckHangarPorts(ports []NewPort) error {
 
 // RestartHangar starts a Hangar again on a new machine with the same disk.
 //
-// The request carries nothing and changes nothing on the record, so its ports,
-// variables and idle timeout are as they were. What stops is everything that
-// runs, the session and its agents included. A Hangar with nothing running is
-// refused with a conflict, because there is nothing to restart.
+// The server starts it from what is saved: its variables, its groups and its
+// ports, so a change saved since it last started takes effect. What stops is
+// everything that runs, the session and its agents included. A Hangar with
+// nothing running is refused with a conflict, because there is nothing to
+// restart.
 func RestartHangar(ctx context.Context, c *api.Client, id string) error {
 	return c.Post(ctx, "/Hangar/RestartHangar/"+id, nil, nil)
+}
+
+// SetHangarPaused pauses a Hangar, or resumes it.
+//
+// Pausing stops its machine and keeps its disk, its ports and its variables;
+// resuming starts it on a new machine with that disk, from the variables, groups
+// and ports saved by then. The server returns early when the state already
+// matches, and refuses a Hangar that never started with a conflict, because
+// there is no machine to stop or start.
+func SetHangarPaused(ctx context.Context, c *api.Client, id string, paused bool) error {
+	body := map[string]any{"isPaused": paused}
+	return c.Put(ctx, "/Hangar/UpdateHangarPauseState/"+id, body, nil)
+}
+
+// SetHangarIdleTimeout changes how long a Hangar may sit idle before it pauses.
+// Nil is never, which the server reads from a null.
+//
+// Only the setting is written. Nothing restarts, and the next idle check reads
+// the new value.
+func SetHangarIdleTimeout(ctx context.Context, c *api.Client, id string, minutes *int) error {
+	body := map[string]any{"idleTimeoutMinutes": minutes}
+	return c.Put(ctx, "/Hangar/UpdateHangarIdleTimeout/"+id, body, nil)
 }
 
 // DeleteHangar removes a Hangar and its disk.
@@ -444,8 +467,14 @@ func (h NewHangar) Check() error {
 	if err := checkHangarAgents(h.Agents); err != nil {
 		return err
 	}
-	if h.IdleTimeoutMinutes != nil && !containsInt(HangarIdleTimeouts, *h.IdleTimeoutMinutes) {
-		return usage(fmt.Sprintf("%d minutes is not an idle timeout a Hangar can have", *h.IdleTimeoutMinutes),
+	return CheckHangarIdleTimeout(h.IdleTimeoutMinutes)
+}
+
+// CheckHangarIdleTimeout refuses an idle timeout the server would refuse. Nil,
+// for never, is always allowed.
+func CheckHangarIdleTimeout(minutes *int) error {
+	if minutes != nil && !containsInt(HangarIdleTimeouts, *minutes) {
+		return usage(fmt.Sprintf("%d minutes is not an idle timeout a Hangar can have", *minutes),
 			"hangar.idle_timeout_invalid", "Use one of: %s.", strings.Join(IdleTimeoutChoices(), ", "))
 	}
 	return nil
@@ -493,13 +522,27 @@ func checkHangarAgents(agents []string) error {
 	return nil
 }
 
-// IdleTimeoutChoices are the idle timeouts as a person writes them: 30m, never.
+// IdleTimeoutChoices are the idle timeouts as a person writes them: 15m, 1h,
+// 24h, never.
 func IdleTimeoutChoices() []string {
 	out := make([]string, 0, len(HangarIdleTimeouts)+1)
 	for _, m := range HangarIdleTimeouts {
-		out = append(out, fmt.Sprintf("%dm", m))
+		out = append(out, IdleTimeoutLabel(&m))
 	}
 	return append(out, "never")
+}
+
+// IdleTimeoutLabel writes an idle timeout the way --idle-timeout takes it:
+// whole hours in hours, anything else in minutes, and nil as never.
+func IdleTimeoutLabel(minutes *int) string {
+	switch {
+	case minutes == nil:
+		return "never"
+	case *minutes%60 == 0:
+		return fmt.Sprintf("%dh", *minutes/60)
+	default:
+		return fmt.Sprintf("%dm", *minutes)
+	}
 }
 
 func containsInt(values []int, v int) bool {

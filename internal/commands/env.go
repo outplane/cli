@@ -55,6 +55,101 @@ func flagApp(ctx context.Context, req Request, command ...string) (core.App, err
 		WithStep("see what this team has", "outplane", "app", "list")
 }
 
+// envTarget is what an env command acts on: an application, or the Hangar that
+// --hangar names. A Hangar is an application record with the same id, so the
+// same endpoints take it. Applying a change is what differs: an application is
+// deployed, and a Hangar is started from what is saved, so it is restarted.
+type envTarget struct {
+	core.App
+
+	// hangar is set when the target is a Hangar.
+	hangar *core.Hangar
+}
+
+// flagTarget is flagApp with --hangar beside --app: one of them at most, and
+// neither is the linked app.
+func flagTarget(ctx context.Context, req Request, command ...string) (envTarget, error) {
+	if err := checkTarget(req); err != nil {
+		return envTarget{}, err
+	}
+	if hangarGiven(req) {
+		return hangarTarget(ctx, req)
+	}
+	app, err := flagApp(ctx, req, command...)
+	return envTarget{App: app}, err
+}
+
+// hangarTarget resolves --hangar the way the hangar commands resolve their
+// argument, so an empty one is refused rather than read as the linked app.
+func hangarTarget(ctx context.Context, req Request) (envTarget, error) {
+	ref := strings.TrimSpace(req.Flags.String("hangar"))
+	if ref == "" {
+		return envTarget{}, clierr.New(clierr.KindUsage, "--hangar is empty").
+			WithCode("usage.empty_argument").
+			WithHint("This is what an unset variable looks like.")
+	}
+	hangar, err := resolveHangar(ctx, req, ref)
+	if err != nil {
+		return envTarget{}, err
+	}
+	return envTarget{App: core.App{ID: hangar.ID, Name: hangar.Name}, hangar: &hangar}, nil
+}
+
+// hangarGiven reports whether --hangar was written, empty or not.
+func hangarGiven(req Request) bool {
+	return req.Given("hangar") || strings.TrimSpace(req.Flags.String("hangar")) != ""
+}
+
+// checkTarget refuses, before anything is sent, flags that cannot apply
+// together: two targets, or the other target's way of applying the change.
+func checkTarget(req Request) error {
+	hangar := hangarGiven(req)
+	switch {
+	case hangar && strings.TrimSpace(req.Flags.String("app")) != "":
+		return clierr.New(clierr.KindUsage, "--app and --hangar are both set").
+			WithCode("usage.conflicting_flags").
+			WithHint("A command acts on one application or one Hangar. Name one of them.")
+	case hangar && req.Flags.Bool("deploy"):
+		return clierr.New(clierr.KindUsage, "--deploy deploys an application, and a Hangar is not deployed").
+			WithCode("usage.conflicting_flags").
+			WithHint("Use --restart to restart the Hangar with the change.")
+	case !hangar && req.Flags.Bool("restart"):
+		return clierr.New(clierr.KindUsage, "--restart restarts a Hangar, and this is an application").
+			WithCode("usage.conflicting_flags").
+			WithHint("An application takes the change when it is deployed: use --deploy, or " +
+				"`outplane deploy create`.")
+	}
+	return nil
+}
+
+// argv is a command over the same target, handed over in an error. A Hangar is
+// named in it, because nothing defaults to one.
+func (t envTarget) argv(req Request, argv ...string) []string {
+	if t.hangar == nil {
+		return argv
+	}
+	return withTeam(req, append(argv, "--hangar", t.Name)...)
+}
+
+// restarted is the result's restarted field, which is null for an application:
+// it applies a change by deploying.
+func (t envTarget) restarted(done bool) any {
+	if t.hangar == nil {
+		return nil
+	}
+	return done
+}
+
+// apply is applyChange for either target. It returns the deployment an
+// application started, or whether a Hangar was restarted.
+func (t envTarget) apply(ctx context.Context, req Request, client *api.Client, what string) (int, bool, error) {
+	if t.hangar != nil {
+		return 0, applyHangarChange(ctx, req, client, *t.hangar, what), nil
+	}
+	id, err := applyChange(ctx, req, client, t.App, what)
+	return id, false, err
+}
+
 // envList reports which variables are set, and by default not what they are.
 //
 // The masking is the whole design of this command. A reader almost always wants
@@ -64,7 +159,7 @@ func flagApp(ctx context.Context, req Request, command ...string) (core.App, err
 // get` prints a single value with no ceremony, so nothing is hidden, only
 // unasked-for.
 func envList(ctx context.Context, req Request) (output.Table, error) {
-	app, err := flagApp(ctx, req, "env", "list")
+	app, err := flagTarget(ctx, req, "env", "list")
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -116,7 +211,7 @@ func envGet(ctx context.Context, req Request) (output.Table, error) {
 			WithStep("see which variables are set", "outplane", "env", "list")
 	}
 
-	app, err := flagApp(ctx, req, "env", "get")
+	app, err := flagTarget(ctx, req, "env", "get")
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -136,7 +231,7 @@ func envGet(ctx context.Context, req Request) (output.Table, error) {
 	if !ok {
 		e := clierr.New(clierr.KindNotFound, "%s has no variable called %s", app.Name, key).
 			WithCode("env.not_found").
-			WithStep("see which variables are set", "outplane", "env", "list")
+			WithStep("see which variables are set", app.argv(req, "outplane", "env", "list")...)
 		if names := keysOf(vars); len(names) > 0 {
 			e = e.WithHint("It has: %s.", strings.Join(names, ", ")).WithDetail("availableKeys", names)
 		} else {
@@ -173,7 +268,7 @@ func envSet(ctx context.Context, req Request) (output.Table, error) {
 		return output.Table{}, err
 	}
 
-	app, err := flagApp(ctx, req, "env", "set")
+	app, err := flagTarget(ctx, req, "env", "set")
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -187,7 +282,7 @@ func envSet(ctx context.Context, req Request) (output.Table, error) {
 
 	if req.CLI.DryRun {
 		req.CLI.Out.Note("Would set %s on %s. Nothing was sent.", strings.Join(keys, ", "), app.Name)
-		return envChangeTable(app, keys, "set", false, 0), nil
+		return envChangeTable(app, keys, "set", false, 0, false), nil
 	}
 
 	if err := core.SetEnv(ctx, client, app.ID, values); err != nil {
@@ -195,11 +290,11 @@ func envSet(ctx context.Context, req Request) (output.Table, error) {
 	}
 	req.CLI.Out.Note("Set %s on %s.", strings.Join(keys, ", "), app.Name)
 
-	id, err := applyChange(ctx, req, client, app, "values")
+	id, restarted, err := app.apply(ctx, req, client, "values")
 	if err != nil {
 		return output.Table{}, err
 	}
-	return envChangeTable(app, keys, "set", true, id), nil
+	return envChangeTable(app, keys, "set", true, id, restarted), nil
 }
 
 // envUnset removes variables by name.
@@ -214,7 +309,7 @@ func envUnset(ctx context.Context, req Request) (output.Table, error) {
 			WithStep("see which variables are set", "outplane", "env", "list")
 	}
 
-	app, err := flagApp(ctx, req, "env", "unset")
+	app, err := flagTarget(ctx, req, "env", "unset")
 	if err != nil {
 		return output.Table{}, err
 	}
@@ -238,7 +333,7 @@ func envUnset(ctx context.Context, req Request) (output.Table, error) {
 		if !ok {
 			e := clierr.New(clierr.KindNotFound, "%s has no variable called %s", app.Name, key).
 				WithCode("env.not_found").
-				WithStep("see which variables are set", "outplane", "env", "list")
+				WithStep("see which variables are set", app.argv(req, "outplane", "env", "list")...)
 			if names := keysOf(vars); len(names) > 0 {
 				e = e.WithHint("It has: %s.", strings.Join(names, ", ")).WithDetail("availableKeys", names)
 			}
@@ -254,7 +349,7 @@ func envUnset(ctx context.Context, req Request) (output.Table, error) {
 
 	if req.CLI.DryRun {
 		req.CLI.Out.Note("Would remove %s from %s. Nothing was sent.", strings.Join(keys, ", "), app.Name)
-		return envChangeTable(app, keys, "unset", false, 0), nil
+		return envChangeTable(app, keys, "unset", false, 0, false), nil
 	}
 
 	for _, t := range targets {
@@ -264,11 +359,11 @@ func envUnset(ctx context.Context, req Request) (output.Table, error) {
 	}
 	req.CLI.Out.Note("Removed %s from %s.", strings.Join(keys, ", "), app.Name)
 
-	id, err := applyChange(ctx, req, client, app, "values")
+	id, restarted, err := app.apply(ctx, req, client, "values")
 	if err != nil {
 		return output.Table{}, err
 	}
-	return envChangeTable(app, keys, "unset", true, id), nil
+	return envChangeTable(app, keys, "unset", true, id, restarted), nil
 }
 
 // applyChange deploys when asked, and says what happens if it is not.
@@ -300,7 +395,44 @@ func applyChange(ctx context.Context, req Request, client *api.Client, app core.
 	return id, nil
 }
 
-func envChangeTable(app core.App, keys []string, action string, changed bool, deploymentID int) output.Table {
+// applyHangarChange is applyChange for a Hangar, which is started from its
+// saved variables, groups and ports: --restart is its --deploy.
+//
+// A paused Hangar is not restarted, because the server refuses that and
+// resuming is what starts one. A restart that does not happen, for that reason
+// or because the server refused, is said rather than returned, as a deployment
+// that could not start is: the change is saved either way.
+func applyHangarChange(ctx context.Context, req Request, client *api.Client, hangar core.Hangar, what string) bool {
+	if hangar.Paused {
+		if req.Flags.Bool("restart") {
+			req.CLI.Out.Note("%s is paused, so nothing was restarted.", hangar.Name)
+		}
+		req.CLI.Out.Note("The change applies when %s is resumed:", hangar.Name)
+		req.CLI.Out.Note("  %s", strings.Join(withTeam(req, "outplane", "hangar", "resume", hangar.Name), " "))
+		return false
+	}
+
+	restart := strings.Join(withTeam(req, "outplane", "hangar", "restart", hangar.Name), " ")
+	if !req.Flags.Bool("restart") {
+		req.CLI.Out.Note("The running Hangar still has the old %s. It gets the change the next time it "+
+			"starts. Restart to apply it now:", what)
+		req.CLI.Out.Note("  %s", restart)
+		return false
+	}
+
+	if err := core.RestartHangar(ctx, client, hangar.ID); err != nil {
+		req.CLI.Out.Note("The change is saved, but %s could not be restarted: %v", hangar.Name, err)
+		req.CLI.Out.Note("Restart it with: %s", restart)
+		return false
+	}
+
+	req.CLI.Out.Note("Restarted %s with the change. It is coming back on a new machine with the same "+
+		"disk, in under a minute.", hangar.Name)
+	req.CLI.Out.Note("Check: %s", strings.Join(hangarStatusArgv(req, hangar), " "))
+	return true
+}
+
+func envChangeTable(app envTarget, keys []string, action string, changed bool, deploymentID int, restarted bool) output.Table {
 	return output.Table{
 		Single:  true,
 		Columns: []string{"action", "keys", "app", "changed", "deploymentId"},
@@ -311,6 +443,7 @@ func envChangeTable(app core.App, keys []string, action string, changed bool, de
 			"app":          app.Name,
 			"changed":      changed,
 			"deploymentId": nilIfZero(deploymentID),
+			"restarted":    app.restarted(restarted),
 		}},
 	}
 }

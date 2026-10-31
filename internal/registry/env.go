@@ -17,6 +17,9 @@ package registry
 //   - The application is named with --app rather than positionally, because
 //     `env unset FOO BAR` cannot otherwise be told from an application called
 //     FOO.
+//   - --hangar names a Hangar instead. It is an application record with the
+//     same id, so the requests are the same. It is started from what is saved,
+//     so --restart is its --deploy.
 
 func init() {
 	Register(
@@ -37,6 +40,51 @@ func appFlag() Flag {
 	}
 }
 
+// hangarFlag is --app's counterpart for a Hangar, here and on env group assign
+// and unassign.
+func hangarFlag() Flag {
+	return Flag{
+		Name:        "hangar",
+		Type:        "string",
+		Description: "a Hangar's name or id, instead of an application. Not with --app",
+	}
+}
+
+// restartFlag is --deploy's counterpart for a Hangar.
+func restartFlag() Flag {
+	return Flag{
+		Name: "restart", Type: "bool", Default: "false",
+		Description: "with --hangar: restart the Hangar afterwards, so the change reaches it now. " +
+			"Stops everything running in its terminal. Restarts nothing on a paused Hangar",
+	}
+}
+
+// restartedField is what --restart reports, on every command that takes it.
+func restartedField() Field {
+	return Field{
+		Name: "restarted",
+		Type: "bool | null",
+		Description: "whether --restart restarted the Hangar. false without it, on a paused Hangar, " +
+			"for a dry run and when the restart was refused. null when the target is an application",
+	}
+}
+
+// Shared by every command that takes --hangar.
+const (
+	hangarTargetNote = "--hangar names a Hangar instead of an application, and is refused together " +
+		"with --app. A Hangar is an application record with the same id, so the requests are the " +
+		"same, and a result's app field holds the Hangar's name."
+	hangarApplyNote = "Saving changes nothing running in a Hangar either. It is started from its " +
+		"saved variables, groups and ports, so without --restart a change applies at its next " +
+		"`outplane hangar restart`, or at `outplane hangar resume` when it is paused. --restart is " +
+		"refused without --hangar, and --deploy with it."
+	hangarRestartNote = "--restart stops everything running in the Hangar's terminal, agents included, " +
+		"and disconnects anyone connected; files under /home/hangar stay. An agent working inside " +
+		"the Hangar ends its own session by passing it. On a paused Hangar it restarts nothing and " +
+		"does not fail, and a restart the server refuses still exits 0 once the change is saved, " +
+		"with restarted false and the reason on stderr."
+)
+
 func envList() Command {
 	return Command{
 		Path:  []string{"env", "list"},
@@ -54,10 +102,14 @@ func envList() Command {
 		Session:      SessionAny,
 		Idempotent:   true,
 
-		APICalls: []string{"GET /api/AppSetting/GetEnvironmentVariables/{appId}"},
+		APICalls: []string{
+			"GET /api/Hangar/GetHangarsByTeamId (with --hangar)",
+			"GET /api/AppSetting/GetEnvironmentVariables/{appId}",
+		},
 
 		Flags: []Flag{
 			appFlag(),
+			hangarFlag(),
 			{
 				Name:        "reveal",
 				Type:        "bool",
@@ -78,8 +130,11 @@ func envList() Command {
 			{Name: "length", Type: "int", Description: "the value's length, which is reported even when it is hidden"},
 		},
 
-		ErrorCodes: []string{"context.no_app", "app.not_found"},
-		ExitCodes:  []int{0, 2, 3, 5, 8},
+		ErrorCodes: []string{
+			"context.no_app", "app.not_found", "hangar.not_found", "hangar.ambiguous",
+			"usage.conflicting_flags", "usage.empty_argument",
+		},
+		ExitCodes: []int{0, 2, 3, 5, 8},
 
 		Examples: []Example{
 			{
@@ -109,6 +164,13 @@ func envList() Command {
 					"truncated": false,
 				},
 			},
+			{
+				Title:        "which variables a Hangar starts with",
+				Command:      "outplane env list --hangar myhangar",
+				Argv:         []string{"outplane", "env", "list", "--hangar", "myhangar"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskRead,
+			},
 		},
 
 		AutomationNotes: []string{
@@ -118,6 +180,7 @@ func envList() Command {
 				"reports what is set on the application itself.",
 			"Keys are compared case-insensitively by the platform, so PATH and path are the " +
 				"same variable.",
+			hangarTargetNote,
 		},
 
 		Related: []string{"env get", "env set", "env unset", "app get"},
@@ -146,21 +209,27 @@ func envGet() Command {
 		// object explicitly.
 		Output: &OutputMode{TTY: "text", Piped: "text"},
 
-		APICalls: []string{"GET /api/AppSetting/GetEnvironmentVariables/{appId}"},
+		APICalls: []string{
+			"GET /api/Hangar/GetHangarsByTeamId (with --hangar)",
+			"GET /api/AppSetting/GetEnvironmentVariables/{appId}",
+		},
 
 		Args: []Arg{
 			{Name: "key", Short: "the variable's name", Required: true},
 		},
 
-		Flags: []Flag{appFlag()},
+		Flags: []Flag{appFlag(), hangarFlag()},
 
 		OutputFields: []Field{
 			{Name: "key", Type: "string"},
 			{Name: "value", Type: "string", Description: "never masked: asking for one value is the request to see it"},
 		},
 
-		ErrorCodes: []string{"env.not_found", "context.no_app", "app.not_found", "usage.missing_argument"},
-		ExitCodes:  []int{0, 2, 3, 5, 8},
+		ErrorCodes: []string{
+			"env.not_found", "context.no_app", "app.not_found", "usage.missing_argument",
+			"hangar.not_found", "hangar.ambiguous", "usage.conflicting_flags", "usage.empty_argument",
+		},
+		ExitCodes: []int{0, 2, 3, 5, 8},
 
 		Examples: []Example{
 			{
@@ -183,6 +252,13 @@ func envGet() Command {
 				Placeholders: map[string]string{"DATABASE_URL": "<KEY>"},
 				Risk:         RiskRead,
 				OutputSample: map[string]any{"key": "DATABASE_URL", "value": "postgresql://…"},
+			},
+			{
+				Title:        "read one value from a Hangar",
+				Command:      "outplane env get LOG_LEVEL --hangar myhangar",
+				Argv:         []string{"outplane", "env", "get", "LOG_LEVEL", "--hangar", "myhangar"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskRead,
 			}},
 
 		AutomationNotes: []string{
@@ -193,6 +269,7 @@ func envGet() Command {
 			"A missing variable is exit 5 with env.not_found and the available keys in the " +
 				"error's details, so a caller never has to list separately to find out what " +
 				"it should have asked for.",
+			hangarTargetNote,
 		},
 
 		Related: []string{"env list", "env set"},
@@ -209,7 +286,8 @@ func envSet() Command {
 			"people setting two different variables at the same time cannot overwrite each " +
 			"other.\n\n" +
 			"The running application keeps its old values until it is deployed again. " +
-			"--deploy does that immediately.",
+			"--deploy does that immediately. A Hangar named with --hangar keeps them until it " +
+			"next starts, and --restart restarts it.",
 
 		Risk:         RiskWrite,
 		RequiresAuth: true,
@@ -219,8 +297,10 @@ func envSet() Command {
 		SupportsDryRun: true,
 
 		APICalls: []string{
+			"GET /api/Hangar/GetHangarsByTeamId (with --hangar)",
 			"POST /api/AppSetting/AddEnvironmentVariables/{appId}",
 			"POST /api/AppDeployment/CreateAppDeployment/{appId}",
+			"POST /api/Hangar/RestartHangar/{hangarId} (with --hangar --restart)",
 		},
 
 		Args: []Arg{
@@ -234,12 +314,14 @@ func envSet() Command {
 
 		Flags: []Flag{
 			appFlag(),
+			hangarFlag(),
 			{
 				Name:        "deploy",
 				Type:        "bool",
 				Default:     "false",
-				Description: "deploy afterwards, so the change reaches the running app",
+				Description: "deploy afterwards, so the change reaches the running app. Not with --hangar",
 			},
+			restartFlag(),
 		},
 
 		OutputFields: []Field{
@@ -252,6 +334,7 @@ func envSet() Command {
 				Type:        "int | null",
 				Description: "the deployment --deploy started, or null when it was not given",
 			},
+			restartedField(),
 		},
 
 		ErrorCodes: []string{
@@ -264,6 +347,10 @@ func envSet() Command {
 			"env.too_many",
 			"context.no_app",
 			"app.not_found",
+			"hangar.not_found",
+			"hangar.ambiguous",
+			"usage.conflicting_flags",
+			"usage.empty_argument",
 		},
 		ExitCodes: []int{0, 2, 3, 5, 8},
 
@@ -302,6 +389,14 @@ func envSet() Command {
 				Argv:         []string{"outplane", "env", "set", "LOG_LEVEL=debug", "--json", "--fields", "keys,changed"},
 				Risk:         RiskWrite,
 				OutputSample: map[string]any{"keys": []any{"LOG_LEVEL"}, "changed": true},
+			},
+			{
+				Title:        "set one on a Hangar and restart it to apply it now",
+				Command:      "outplane env set LOG_LEVEL=debug --hangar myhangar --restart --json --fields app,changed,restarted",
+				Argv:         []string{"outplane", "env", "set", "LOG_LEVEL=debug", "--hangar", "myhangar", "--restart", "--json", "--fields", "app,changed,restarted"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{"app": "myhangar", "changed": true, "restarted": true},
 			}},
 
 		AutomationNotes: []string{
@@ -318,9 +413,12 @@ func envSet() Command {
 				"arguments leaves the same state.",
 			"deploymentId is null unless --deploy was given. A queued deployment is not a " +
 				"finished one; follow it with `outplane deploy logs`.",
+			hangarTargetNote,
+			hangarApplyNote,
+			hangarRestartNote,
 		},
 
-		Related: []string{"env list", "env get", "env unset", "deploy create"},
+		Related: []string{"env list", "env get", "env unset", "deploy create", "hangar restart"},
 		DocsURL: "https://docs.outplane.com/cli/env",
 	}
 }
@@ -333,7 +431,8 @@ func envUnset() Command {
 			"Every name is checked before anything is removed, so a typo in the third name " +
 			"does not leave the first two gone.\n\n" +
 			"The value is not recoverable afterwards, and the running application keeps it " +
-			"until the app is deployed again.",
+			"until the app is deployed again. A Hangar named with --hangar keeps it until it " +
+			"next starts, and --restart restarts it.",
 
 		Risk:         RiskWrite,
 		RequiresAuth: true,
@@ -343,8 +442,10 @@ func envUnset() Command {
 		SupportsDryRun: true,
 
 		APICalls: []string{
+			"GET /api/Hangar/GetHangarsByTeamId (with --hangar)",
 			"GET /api/AppSetting/GetEnvironmentVariables/{appId}",
 			"DELETE /api/AppSetting/DeleteEnvironmentVariable/{appId}/{id}",
+			"POST /api/Hangar/RestartHangar/{hangarId} (with --hangar --restart)",
 		},
 
 		Args: []Arg{
@@ -358,12 +459,14 @@ func envUnset() Command {
 
 		Flags: []Flag{
 			appFlag(),
+			hangarFlag(),
 			{
 				Name:        "deploy",
 				Type:        "bool",
 				Default:     "false",
-				Description: "deploy afterwards, so the removal reaches the running app",
+				Description: "deploy afterwards, so the removal reaches the running app. Not with --hangar",
 			},
+			restartFlag(),
 		},
 
 		OutputFields: []Field{
@@ -372,10 +475,14 @@ func envUnset() Command {
 			{Name: "app", Type: "string"},
 			{Name: "changed", Type: "bool", Description: "false for a dry run"},
 			{Name: "deploymentId", Type: "int | null"},
+			restartedField(),
 		},
 
-		ErrorCodes: []string{"env.not_found", "context.no_app", "app.not_found", "usage.missing_argument"},
-		ExitCodes:  []int{0, 2, 3, 5, 8},
+		ErrorCodes: []string{
+			"env.not_found", "context.no_app", "app.not_found", "usage.missing_argument",
+			"hangar.not_found", "hangar.ambiguous", "usage.conflicting_flags", "usage.empty_argument",
+		},
+		ExitCodes: []int{0, 2, 3, 5, 8},
 
 		Examples: []Example{
 			{
@@ -404,6 +511,13 @@ func envUnset() Command {
 				Argv:    []string{"outplane", "env", "unset", "LOG_LEVEL", "TIMEOUT", "--json", "--fields", "keys,changed"},
 				Risk:    RiskWrite,
 			},
+			{
+				Title:        "remove one from a Hangar and restart it to apply the change",
+				Command:      "outplane env unset LOG_LEVEL --hangar myhangar --restart",
+				Argv:         []string{"outplane", "env", "unset", "LOG_LEVEL", "--hangar", "myhangar", "--restart"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskWrite,
+			},
 		},
 
 		AutomationNotes: []string{
@@ -414,9 +528,12 @@ func envUnset() Command {
 				"irreversible part is the value, not the application.",
 			"Without --deploy the running application still has the variable. Removing it " +
 				"from the record and from the process are two different things.",
+			hangarTargetNote,
+			hangarApplyNote,
+			hangarRestartNote,
 		},
 
-		Related: []string{"env list", "env set", "deploy create"},
+		Related: []string{"env list", "env set", "deploy create", "hangar restart"},
 		DocsURL: "https://docs.outplane.com/cli/env",
 	}
 }

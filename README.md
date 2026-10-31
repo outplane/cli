@@ -81,9 +81,9 @@ runnable examples. `outplane schema` is the same surface as JSON.
 | Group | What it does |
 | --- | --- |
 | `app` | create, list, inspect, scale, pause, rename, delete, and open a shell on a running instance |
-| `hangar`, `hangar port`, `hangar metrics` | create, list, inspect, restart and delete cloud machines for coding agents, open ports for their dev servers, see what they are using, and join a Hangar's terminal session, which keeps running after you leave |
+| `hangar`, `hangar port`, `hangar metrics` | create, list, inspect, pause, resume, restart and delete cloud machines for coding agents, set how long one may sit idle before it pauses, change their variables and variable groups with `env --hangar` for the next time they start, open ports for their dev servers, see what they are using, and join a Hangar's terminal session, which keeps running after you leave |
 | `deploy` | deploy, follow a build, read its log, list what shipped |
-| `env`, `env group` | variables on one application or shared across several, plus `pull`, `push` and `run` |
+| `env`, `env group` | variables on one application or shared across several, plus `pull`, `push` and `run`; `--hangar` points `list`, `get`, `set`, `unset`, `group assign` and `group unassign` at a Hangar |
 | `port` | which ports an application serves, and which of them are public |
 | `build` | build method, directory, start command, path filters |
 | `domain` | custom domains, the DNS record each one needs, which port it points at |

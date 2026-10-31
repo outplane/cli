@@ -37,7 +37,7 @@ by its owner, and `outplane status` says which of the two answered.
 
 ## What it covers
 
-99 commands, over applications, deployments, environment variables, ports,
+102 commands, over applications, deployments, environment variables, ports,
 build settings, custom domains, volumes, managed PostgreSQL, IP access
 profiles, registry credentials, logs, requests and metrics, and Hangars for
 coding agents.

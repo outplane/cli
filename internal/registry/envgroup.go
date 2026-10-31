@@ -156,8 +156,8 @@ func envGroupGet() Command {
 			{Name: "app", Type: "string", Description: "with --apps: an application or a Hangar using the group"},
 			{
 				Name: "kind", Type: "string",
-				Description: "with --apps: app or hangar. A Hangar keeps the values it was created " +
-					"with, so a change to the group never reaches it",
+				Description: "with --apps: app or hangar. A change to the group reaches an " +
+					"application at its next deployment and a Hangar the next time it starts",
 			},
 			{Name: "appId", Type: "string", Description: "with --apps"},
 			{Name: "assignmentId", Type: "string", Description: "with --apps: the record that joins them"},
@@ -388,14 +388,16 @@ func envGroupAssign() Command {
 	return assignmentCommand("assign", "give an application a group's variables",
 		"Assigns a group to an application.\n\n"+
 			"The application receives the group's variables at its next deployment. Its own "+
-			"variables still win when the same key is in both.")
+			"variables still win when the same key is in both. A Hangar named with --hangar "+
+			"receives them the next time it starts, and --restart restarts it.")
 }
 
 func envGroupUnassign() Command {
 	return assignmentCommand("unassign", "stop an application using a group",
 		"Removes a group from an application.\n\n"+
 			"The application keeps the variables until its next deployment, when it loses "+
-			"them. The group itself is untouched.")
+			"them. A Hangar named with --hangar keeps them until it next starts, and --restart "+
+			"restarts it. The group itself is untouched.")
 }
 
 // assignmentCommand is the shared declaration for the pair.
@@ -412,9 +414,11 @@ func assignmentCommand(verb, short, long string) Command {
 		SupportsDryRun: true,
 
 		APICalls: []string{
+			"GET /api/Hangar/GetHangarsByTeamId (with --hangar)",
 			"GET /api/EnvVariableGroup/GetAssignedGroupsByAppId/{appId}",
 			"POST /api/EnvVariableGroup/Assign",
 			"DELETE /api/EnvVariableGroup/Unassign/{assignmentId}",
+			"POST /api/Hangar/RestartHangar/{hangarId} (with --hangar --restart)",
 		},
 
 		Args: []Arg{groupArg()},
@@ -424,6 +428,8 @@ func assignmentCommand(verb, short, long string) Command {
 				Name: "app", Type: "string",
 				Description: "application name or id. Defaults to the linked app",
 			},
+			hangarFlag(),
+			restartFlag(),
 		},
 
 		OutputFields: []Field{
@@ -431,10 +437,14 @@ func assignmentCommand(verb, short, long string) Command {
 			{Name: "groupId", Type: "string"},
 			{Name: "app", Type: "string"},
 			{Name: "changed", Type: "bool", Description: "false when it was already in that state"},
+			restartedField(),
 		},
 
-		ErrorCodes: []string{"envgroup.not_found", "app.not_found", "context.no_app"},
-		ExitCodes:  []int{0, 2, 3, 5, 8},
+		ErrorCodes: []string{
+			"envgroup.not_found", "app.not_found", "context.no_app", "hangar.not_found",
+			"hangar.ambiguous", "usage.conflicting_flags", "usage.empty_argument",
+		},
+		ExitCodes: []int{0, 2, 3, 5, 8},
 
 		Examples: []Example{
 			{
@@ -459,18 +469,30 @@ func assignmentCommand(verb, short, long string) Command {
 				Placeholders: map[string]string{"shared": "<GROUP_NAME>", "checkout": "<APP_NAME>"},
 				Risk:         RiskWrite,
 			},
+			{
+				Title:        verb + " one on a Hangar and restart it to apply the change",
+				Command:      "outplane env group " + verb + " shared --hangar myhangar --restart --json --fields group,changed,restarted",
+				Argv:         []string{"outplane", "env", "group", verb, "shared", "--hangar", "myhangar", "--restart", "--json", "--fields", "group,changed,restarted"},
+				Placeholders: map[string]string{"shared": "<GROUP_NAME>", "myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{"group": "shared", "changed": true, "restarted": true},
+			},
 		},
 
 		AutomationNotes: []string{
 			"Idempotent. Assigning something already assigned reports changed false and " +
-				"exits 0, and so does unassigning something that was not assigned.",
+				"exits 0, and so does unassigning something that was not assigned. Nothing is " +
+				"restarted then.",
 			"The API removes an assignment by the assignment's own id, not by the pair, so " +
 				"the assignment is looked up first. That is one extra request and it is what " +
 				"turns a missing assignment into a sentence rather than a 404.",
 			"The change reaches the application at its next deployment.",
+			hangarTargetNote,
+			hangarApplyNote,
+			hangarRestartNote,
 		},
 
-		Related: []string{"env group list", "env group get", "app get"},
+		Related: []string{"env group list", "env group get", "app get", "hangar restart"},
 		DocsURL: "https://docs.outplane.com/cli/env",
 	}
 }

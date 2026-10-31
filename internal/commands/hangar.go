@@ -159,12 +159,19 @@ func targetHangar(ctx context.Context, req Request, verb string) (core.Hangar, e
 			WithHint("This is what an unset variable looks like.")
 	}
 
+	return resolveHangar(ctx, req, req.Args[0])
+}
+
+// resolveHangar turns a Hangar's name or id into the Hangar, translating the
+// domain errors. It is targetHangar for a reference that arrives in a flag
+// rather than as the first argument, as --hangar does on the env commands.
+func resolveHangar(ctx context.Context, req Request, ref string) (core.Hangar, error) {
 	client, err := req.CLI.APIClient()
 	if err != nil {
 		return core.Hangar{}, err
 	}
 
-	hangar, err := core.FindHangar(ctx, client, req.Args[0])
+	hangar, err := core.FindHangar(ctx, client, ref)
 	if err == nil {
 		return hangar, nil
 	}
@@ -236,6 +243,7 @@ func notRunning(req Request, err error, hangar core.Hangar) error {
 	case "paused":
 		hint = "A paused Hangar accepts a connection once it is resumed."
 		e.Retryable = false
+		e = e.WithStep("resume it", withTeam(req, "outplane", "hangar", "resume", hangar.Name)...)
 	default:
 		hint = "This Hangar is " + hangar.Status + " and accepts a connection once it runs again."
 		e.Retryable = false

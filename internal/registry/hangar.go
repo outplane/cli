@@ -16,6 +16,9 @@ package registry
 //     retrying never helps.
 //   - The list carries every field the detail does, so a name costs one request
 //     to resolve and get needs no second one.
+//   - Pausing stops the machine and keeps the disk, the ports and the
+//     variables, so a paused Hangar refuses connect and restart and resume is
+//     the way back. An idle timeout pauses it the same way.
 //
 // connect is a session, so its declaration follows app shell's. What sets it
 // apart is whose session it is. app shell starts a terminal of its own and ends
@@ -35,6 +38,9 @@ func init() {
 		hangarGet(),
 		hangarCreate(),
 		hangarConnect(),
+		hangarPause(),
+		hangarResume(),
+		hangarUpdate(),
 		hangarRestart(),
 		hangarDelete(),
 	)
@@ -79,9 +85,10 @@ func hangarFields() []Field {
 		{Name: "size", Type: "string", Description: "instance type code, e.g. op-46. Set by the platform"},
 		{Name: "diskGb", Type: "int", Description: "the disk's size in GB. Set by the platform"},
 		{
-			Name:        "idleTimeoutMinutes",
-			Type:        "int | null",
-			Description: "the idle timeout chosen at creation, in minutes. null for never",
+			Name: "idleTimeoutMinutes",
+			Type: "int | null",
+			Description: "how long it may sit idle before it pauses, in minutes: 15, 30, 60, 120, " +
+				"360, 720 or 1440. null for never. Changed with hangar update",
 		},
 		{
 			Name: "ports",
@@ -97,6 +104,16 @@ func hangarFields() []Field {
 // hangarAgents is the agent catalog as --agent accepts it. It is the server's
 // list, kept in step with core.HangarAgents.
 var hangarAgents = []string{"codex", "claude-code", "pi", "omp", "devin", "opencode", "cursor"}
+
+// hangarIdleTimeouts are the idle timeouts as --idle-timeout takes them. They
+// are the server's list, kept in step with core.IdleTimeoutChoices.
+var hangarIdleTimeouts = []string{"15m", "30m", "1h", "2h", "6h", "12h", "24h", "never"}
+
+// hangarAutoPauseNote is how an idle timeout acts, wherever one is set.
+const hangarAutoPauseNote = "With an idle timeout, the platform checks every 5 minutes and pauses a " +
+	"Hangar whose terminal has had no output in any window and no key from anyone connected for " +
+	"that long, so 30m pauses it 30 to 35 minutes after the last activity. A paused Hangar keeps " +
+	"its disk, its ports and its variables, and `outplane hangar resume` starts it again."
 
 func hangarList() Command {
 	return Command{
@@ -301,9 +318,9 @@ func hangarCreate() Command {
 			},
 			{
 				Name: "idle-timeout", Type: "string", Default: "30m",
-				Enum: []string{"30m", "never"},
-				Description: "how long the Hangar may sit idle, as a duration or never. Recorded with " +
-					"the Hangar",
+				Enum: hangarIdleTimeouts,
+				Description: "how long the Hangar may sit idle before it pauses, as a duration or " +
+					"never. Idle means no output in its terminal and no key from anyone connected",
 			},
 		},
 
@@ -409,12 +426,15 @@ func hangarCreate() Command {
 				"hangar.limit_reached; retrying never helps, and deleting one makes room.",
 			"Without --agent, claude-code and codex are installed, as in the console. " +
 				"--terminal-only installs none.",
+			"Without --idle-timeout, the Hangar pauses after 30 minutes idle. " + hangarAutoPauseNote +
+				" `outplane hangar update --idle-timeout` changes it later.",
 			"The size and the disk are set by the platform, not by a flag. Under --dry-run they " +
 				"are null, as are id and status.",
 			"Variable values are never echoed back; envCount reports how many were set. A " +
 				"variable set with --env wins over a group's, and between groups the one given " +
 				"later wins. A group used only at build reaches nothing here, because a Hangar " +
-				"never builds.",
+				"never builds. `outplane env set --hangar` and `outplane env group assign --hangar` " +
+				"change them afterwards, and a change applies the next time the Hangar starts.",
 			"--env-group takes a name or an id. Each one is resolved with a request of its own " +
 				"before anything is sent, under --dry-run as well.",
 			"Everything the server would refuse is checked first, so an error names the field. " +
@@ -437,8 +457,9 @@ func hangarRestart() Command {
 		Long: "Starts a Hangar again on a new machine with the same disk, pulling the Hangar " +
 			"image again.\n\n" +
 			"Everything running in its terminal stops, agents included, and anyone connected is " +
-			"disconnected. Files under /home/hangar stay. Its ports and variables are not " +
-			"touched.\n\n" +
+			"disconnected. Files under /home/hangar stay. It starts with its saved variables, " +
+			"variable groups and ports, so a change saved with `outplane env set --hangar` or " +
+			"`outplane env group assign --hangar` since it last started takes effect.\n\n" +
 			"It is back in under a minute: its status reads deploying, then ready, and " +
 			"`outplane hangar connect` joins it again from then.",
 
@@ -511,8 +532,10 @@ func hangarRestart() Command {
 
 		AutomationNotes: []string{
 			"Everything running in the Hangar's terminal stops, agents included, and anyone " +
-				"connected is disconnected. Files under /home/hangar stay, on the same disk, and " +
-				"its ports and variables are not touched.",
+				"connected is disconnected. Files under /home/hangar stay, on the same disk.",
+			"It starts with the variables, variable groups and ports saved by then, so a change " +
+				"saved with `outplane env set --hangar` or `outplane env group assign --hangar` since " +
+				"it last started takes effect. Its idle timeout is as it was.",
 			"The command returns once the restart is accepted, not once the Hangar is back. It is " +
 				"back in under a minute: poll `outplane hangar get <name> --json --fields status` " +
 				"until it has read deploying and then ready; a ready in the first few seconds can " +
@@ -520,14 +543,265 @@ func hangarRestart() Command {
 				"hangar.not_running until then.",
 			"Exit 6 with hangar.not_running means nothing is running to restart, for example a " +
 				"Hangar that never started or one that is paused. Nothing changed, and retrying " +
-				"does not help.",
+				"does not help. A paused one is started again with `outplane hangar resume`, " +
+				"which the error names.",
 			"Not idempotent: each restart stops whatever is running at the time. Under --dry-run " +
 				"nothing is sent and restarted is false.",
 			"It takes no confirmation, because the disk is the same one afterwards. `hangar " +
 				"delete` is the command that removes it.",
 		},
 
-		Related: []string{"hangar get", "hangar connect", "hangar list", "hangar delete"},
+		Related: []string{"hangar get", "hangar connect", "hangar list", "hangar resume", "hangar delete"},
+		DocsURL: "https://docs.outplane.com/cli/hangar",
+	}
+}
+
+func hangarPause() Command {
+	return hangarPauseCommand("pause", "pause a Hangar, keeping its disk",
+		"Stops a Hangar's machine without deleting anything.\n\n"+
+			"Everything running in its terminal stops, agents included, and anyone connected is "+
+			"disconnected. Files under /home/hangar stay, and so do its ports and its variables.\n\n"+
+			"While it is paused, `outplane hangar connect` and `outplane hangar restart` are "+
+			"refused. `outplane hangar resume` starts it again.")
+}
+
+func hangarResume() Command {
+	return hangarPauseCommand("resume", "start a paused Hangar again",
+		"Starts a paused Hangar on a new machine with the same disk, in under a minute.\n\n"+
+			"Files under /home/hangar are as they were left. It starts with its saved variables, "+
+			"variable groups and ports, including any change saved while it was paused. Nothing "+
+			"that was running in its terminal before the pause comes back on its own.\n\n"+
+			"`outplane hangar connect` joins it once its status reads ready; a ready in the first few "+
+			"seconds can still be the state from before the pause.")
+}
+
+// hangarPauseCommand is app pause's shared declaration, for a Hangar. The two
+// commands differ in one word, and so does what they say about the machine:
+// pausing ends what runs in the terminal, resuming starts a new one.
+func hangarPauseCommand(verb, short, long string) Command {
+	idempotent := "Idempotent. Pausing a Hangar that is already paused sends nothing, reports " +
+		"changed false and exits 0."
+	if verb == "resume" {
+		idempotent = "Idempotent. Resuming a Hangar that is not paused sends nothing, reports " +
+			"changed false and exits 0, whatever its status."
+	}
+	notes := []string{
+		idempotent,
+		"Files under /home/hangar, its ports, its variables and its idle timeout are kept " +
+			"either way.",
+	}
+	if verb == "pause" {
+		notes = append(notes,
+			"Everything running in its terminal stops, agents included, and anyone connected is "+
+				"disconnected. Work that exists only in a running process is gone; files on the "+
+				"disk are not.",
+			"While it is paused, its status reads paused, `hangar connect` and `hangar restart` "+
+				"exit 6 with hangar.not_running, and `hangar metrics` reports null CPU and memory, not 0.",
+			hangarAutoPauseNote)
+	} else {
+		notes = append(notes,
+			"The command returns once the resume is accepted, not once the Hangar runs. It is back "+
+				"in under a minute: poll `outplane hangar get <name> --json --fields status` until "+
+				"it has read deploying and then ready; a ready in the first few seconds can still be "+
+				"the state from before the pause. `hangar connect` is refused with hangar.not_running "+
+				"until then.",
+			"It starts on a new machine, so nothing that was running before the pause comes back "+
+				"on its own.",
+			"It starts with the variables, variable groups and ports saved by then, so a change "+
+				"saved with `outplane env set --hangar` or `outplane env group assign --hangar` while "+
+				"it was paused takes effect.")
+	}
+	notes = append(notes,
+		"Exit 6 with hangar.never_started means the Hangar has no machine to stop or start. "+
+			"retryable is true while it is still starting for the first time; otherwise deleting "+
+			"it and creating it again is the way back.")
+
+	return Command{
+		Path:  []string{"hangar", verb},
+		Short: short,
+		Long:  long,
+
+		Risk:         RiskWrite,
+		RequiresAuth: true,
+		Session:      SessionAny,
+		Idempotent:   true,
+
+		SupportsDryRun: true,
+
+		APICalls: []string{
+			"GET /api/Hangar/GetHangarsByTeamId",
+			"PUT /api/Hangar/UpdateHangarPauseState/{hangarId}",
+		},
+
+		Args: []Arg{hangarArg()},
+
+		OutputFields: []Field{
+			{Name: "hangar", Type: "string", Description: "the Hangar's immutable name"},
+			{Name: "hangarId", Type: "string"},
+			{Name: "paused", Type: "bool", Description: "the state the Hangar is now in"},
+			{
+				Name:        "changed",
+				Type:        "bool",
+				Description: "false when it was already in that state, and for a dry run",
+			},
+		},
+
+		ErrorCodes: []string{
+			"hangar.never_started",
+			"hangar.not_found",
+			"hangar.ambiguous",
+			"usage.missing_argument",
+			"usage.empty_argument",
+			"context.no_team",
+		},
+		ExitCodes: []int{0, 2, 3, 5, 6, 8},
+
+		Examples: []Example{
+			{
+				Title:        "see what it would do, without sending it",
+				Command:      "outplane hangar " + verb + " myhangar --dry-run --json",
+				Argv:         []string{"outplane", "hangar", verb, "myhangar", "--dry-run", "--json"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"hangar": "myhangar", "paused": verb == "pause", "changed": false},
+			},
+			{
+				Title:        verb + " a Hangar",
+				Command:      "outplane hangar " + verb + " myhangar",
+				Argv:         []string{"outplane", "hangar", verb, "myhangar"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:        verb + " one and read the result in a pipeline",
+				Command:      "outplane hangar " + verb + " myhangar --json --fields paused,changed",
+				Argv:         []string{"outplane", "hangar", verb, "myhangar", "--json", "--fields", "paused,changed"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{"paused": verb == "pause", "changed": true},
+			},
+			{
+				Title:   verb + " one in another team",
+				Command: "outplane hangar " + verb + " myhangar --team acme",
+				Argv:    []string{"outplane", "hangar", verb, "myhangar", "--team", "acme"},
+				Placeholders: map[string]string{
+					"myhangar": "<HANGAR_NAME>",
+					"acme":     "<TEAM_SLUG>",
+				},
+				Risk: RiskWrite,
+			},
+		},
+
+		AutomationNotes: notes,
+
+		Related: []string{"hangar " + sibling(verb), "hangar update", "hangar get", "hangar connect"},
+		DocsURL: "https://docs.outplane.com/cli/hangar",
+	}
+}
+
+// hangarUpdate changes the one setting a Hangar has that is neither its ports
+// nor fixed at creation. It writes that setting alone, so it restarts nothing.
+func hangarUpdate() Command {
+	return Command{
+		Path:  []string{"hangar", "update"},
+		Short: "change how long a Hangar may sit idle before it pauses",
+		Long: "Changes a Hangar's idle timeout: 15m, 30m, 1h, 2h, 6h, 12h, 24h, or never.\n\n" +
+			"Idle means no output in any window of its terminal and no key from anyone connected. " +
+			"The platform checks every 5 minutes, so a timeout of 30m pauses it 30 to 35 minutes " +
+			"after the last activity. A paused Hangar keeps its disk, its ports and its variables, " +
+			"and `outplane hangar resume` starts it again.\n\n" +
+			"Only the setting changes. Nothing restarts, and the next check reads the new value.",
+
+		Risk:         RiskWrite,
+		RequiresAuth: true,
+		Session:      SessionAny,
+		Idempotent:   true,
+
+		SupportsDryRun: true,
+
+		APICalls: []string{
+			"GET /api/Hangar/GetHangarsByTeamId",
+			"PUT /api/Hangar/UpdateHangarIdleTimeout/{hangarId}",
+		},
+
+		Args: []Arg{hangarArg()},
+
+		Flags: []Flag{
+			{
+				Name: "idle-timeout", Type: "string",
+				Enum: hangarIdleTimeouts,
+				Description: "how long it may sit idle before it pauses, as a duration or never. " +
+					"Required",
+			},
+		},
+
+		OutputFields: []Field{
+			{Name: "hangar", Type: "string", Description: "the Hangar's immutable name"},
+			{Name: "hangarId", Type: "string"},
+			{
+				Name:        "idleTimeoutMinutes",
+				Type:        "int | null",
+				Description: "the idle timeout it now has, in minutes. null for never",
+			},
+			{
+				Name:        "changed",
+				Type:        "bool",
+				Description: "false when it already had that timeout, and for a dry run",
+			},
+		},
+
+		ErrorCodes: []string{
+			"usage.no_change",
+			"hangar.idle_timeout_invalid",
+			"hangar.not_found",
+			"hangar.ambiguous",
+			"usage.missing_argument",
+			"usage.empty_argument",
+			"context.no_team",
+		},
+		ExitCodes: []int{0, 2, 3, 5, 8},
+
+		Examples: []Example{
+			{
+				Title:        "check the change without sending it",
+				Command:      "outplane hangar update myhangar --idle-timeout 2h --dry-run --json",
+				Argv:         []string{"outplane", "hangar", "update", "myhangar", "--idle-timeout", "2h", "--dry-run", "--json"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"hangar": "myhangar", "idleTimeoutMinutes": 120, "changed": false},
+			},
+			{
+				Title:        "let it sit idle for up to a day",
+				Command:      "outplane hangar update myhangar --idle-timeout 24h",
+				Argv:         []string{"outplane", "hangar", "update", "myhangar", "--idle-timeout", "24h"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:        "never pause it on its own, and read the result",
+				Command:      "outplane hangar update myhangar --idle-timeout never --json --fields idleTimeoutMinutes,changed",
+				Argv:         []string{"outplane", "hangar", "update", "myhangar", "--idle-timeout", "never", "--json", "--fields", "idleTimeoutMinutes,changed"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{"idleTimeoutMinutes": nil, "changed": true},
+			},
+		},
+
+		AutomationNotes: []string{
+			"--idle-timeout is required. Without it the command exits 2 with usage.no_change.",
+			"It takes a duration or never. The lengths are 15m, 30m, 1h, 2h, 6h, 12h and 24h, " +
+				"written in minutes or hours, so 60m and 1h are the same. Any other length exits 2 " +
+				"with hangar.idle_timeout_invalid before anything is sent.",
+			hangarAutoPauseNote,
+			"Only the setting is written. This command neither restarts nor pauses the Hangar, and " +
+				"its terminal and agents keep running. One already idle for longer than the new " +
+				"timeout is paused at the next check.",
+			"A paused Hangar keeps its timeout, and changing it does not resume it.",
+			"Idempotent. Setting the timeout it already has sends nothing, reports changed false " +
+				"and exits 0.",
+		},
+
+		Related: []string{"hangar get", "hangar pause", "hangar resume", "hangar create"},
 		DocsURL: "https://docs.outplane.com/cli/hangar",
 	}
 }

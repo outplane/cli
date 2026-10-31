@@ -246,11 +246,7 @@ func describeNewHangar(req Request, spec core.NewHangar, groups []string) {
 	}
 	req.CLI.Out.Note("Would create %s with %s.", spec.Name, agents)
 
-	if spec.IdleTimeoutMinutes == nil {
-		req.CLI.Out.Note("  idle timeout: never")
-	} else {
-		req.CLI.Out.Note("  idle timeout: %d minutes", *spec.IdleTimeoutMinutes)
-	}
+	req.CLI.Out.Note("  idle timeout: %s", core.IdleTimeoutLabel(spec.IdleTimeoutMinutes))
 	if len(spec.Env) > 0 {
 		req.CLI.Out.Note("  %s, values not shown", plural(len(spec.Env), "environment variable"))
 	}

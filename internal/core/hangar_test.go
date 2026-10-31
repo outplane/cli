@@ -65,7 +65,7 @@ func TestNewHangarBodyCarriesWhatWasAskedFor(t *testing.T) {
 }
 
 func TestNewHangarCheck(t *testing.T) {
-	thirty, sixty := 30, 60
+	thirty, day, fortyFive := 30, 1440, 45
 
 	cases := []struct {
 		name string
@@ -74,6 +74,7 @@ func TestNewHangarCheck(t *testing.T) {
 	}{
 		{"a valid one", NewHangar{Name: "workbench", Agents: []string{"claude-code", "codex"}, IdleTimeoutMinutes: &thirty}, ""},
 		{"never times out", NewHangar{Name: "workbench"}, ""},
+		{"a day", NewHangar{Name: "workbench", IdleTimeoutMinutes: &day}, ""},
 		{"terminal only", NewHangar{Name: "workbench", Agents: []string{}}, ""},
 		{"too short", NewHangar{Name: "box"}, "hangar.name_invalid"},
 		{"too long", NewHangar{Name: strings.Repeat("a", 46)}, "hangar.name_invalid"},
@@ -81,7 +82,7 @@ func TestNewHangarCheck(t *testing.T) {
 		{"reserved", NewHangar{Name: "Admin"}, "hangar.name_reserved"},
 		{"unknown agent", NewHangar{Name: "workbench", Agents: []string{"notepad"}}, "hangar.agent_invalid"},
 		{"agent twice", NewHangar{Name: "workbench", Agents: []string{"codex", "codex"}}, "hangar.agent_duplicate"},
-		{"timeout not offered", NewHangar{Name: "workbench", IdleTimeoutMinutes: &sixty}, "hangar.idle_timeout_invalid"},
+		{"timeout not offered", NewHangar{Name: "workbench", IdleTimeoutMinutes: &fortyFive}, "hangar.idle_timeout_invalid"},
 	}
 
 	for _, tc := range cases {
@@ -234,28 +235,40 @@ func TestCheckHangarPorts(t *testing.T) {
 	}
 }
 
+// The choices are what --idle-timeout takes and what an error lists, so each one
+// has to be written the way a person would type it.
+func TestIdleTimeoutChoices(t *testing.T) {
+	const want = "15m,30m,1h,2h,6h,12h,24h,never"
+	if got := strings.Join(IdleTimeoutChoices(), ","); got != want {
+		t.Errorf("choices are %s, want %s", got, want)
+	}
+}
+
 // The registry publishes the agent catalog and the idle timeouts as enums, and
-// cannot import this package to read them. This keeps the two in step.
+// cannot import this package to read them. This keeps the two in step, in
+// create and in update.
 func TestHangarCatalogMatchesTheRegistry(t *testing.T) {
-	var create *registry.Command
-	for i, c := range registry.Commands {
-		if strings.Join(c.Path, " ") == "hangar create" {
-			create = &registry.Commands[i]
+	enums := map[string]map[string][]string{}
+	for _, c := range registry.Commands {
+		path := strings.Join(c.Path, " ")
+		if path != "hangar create" && path != "hangar update" {
+			continue
+		}
+		enums[path] = map[string][]string{}
+		for _, f := range c.Flags {
+			enums[path][f.Name] = f.Enum
 		}
 	}
-	if create == nil {
-		t.Fatal("hangar create is not declared")
+	for _, path := range []string{"hangar create", "hangar update"} {
+		if enums[path] == nil {
+			t.Fatalf("%s is not declared", path)
+		}
+		if got, want := strings.Join(enums[path]["idle-timeout"], ","), strings.Join(IdleTimeoutChoices(), ","); got != want {
+			t.Errorf("%s: --idle-timeout enum is %s, and the choices are %s", path, got, want)
+		}
 	}
 
-	enums := map[string][]string{}
-	for _, f := range create.Flags {
-		enums[f.Name] = f.Enum
-	}
-
-	if got, want := strings.Join(enums["agent"], ","), strings.Join(HangarAgents, ","); got != want {
+	if got, want := strings.Join(enums["hangar create"]["agent"], ","), strings.Join(HangarAgents, ","); got != want {
 		t.Errorf("--agent enum is %s, and the catalog is %s", got, want)
-	}
-	if got, want := strings.Join(enums["idle-timeout"], ","), strings.Join(IdleTimeoutChoices(), ","); got != want {
-		t.Errorf("--idle-timeout enum is %s, and the choices are %s", got, want)
 	}
 }

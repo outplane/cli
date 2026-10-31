@@ -117,8 +117,8 @@ func assignedAppsTable(g core.EnvGroup) output.Table {
 	switch {
 	case hangars:
 		table.Footer = "Each application here picks up a change to " + g.Name +
-			" at its next deployment, and nothing deploys them for you. A Hangar keeps the " +
-			"values it was created with."
+			" at its next deployment, and nothing deploys them for you. A Hangar picks it up " +
+			"the next time it starts."
 	case len(g.AssignedApps) > 0:
 		table.Footer = "Each of these picks up a change to " + g.Name +
 			" at its next deployment. Nothing deploys them for you."
@@ -392,22 +392,26 @@ func envGroupAssign(ctx context.Context, req Request) (output.Table, error) {
 	for _, a := range assignments {
 		if a.GroupID == group.ID {
 			req.CLI.Out.Note("%s is already assigned to %s.", group.Name, app.Name)
-			return assignmentTable(group, app.Name, false), nil
+			return assignmentTable(group, app, false, false), nil
 		}
 	}
 
 	if req.CLI.DryRun {
 		req.CLI.Out.Note("Would assign %s to %s. Nothing was sent.", group.Name, app.Name)
-		return assignmentTable(group, app.Name, false), nil
+		return assignmentTable(group, app, false, false), nil
 	}
 
 	if err := core.AssignEnvGroup(ctx, client, group.ID, app.ID); err != nil {
 		return output.Table{}, err
 	}
 
+	if app.hangar != nil {
+		req.CLI.Out.Note("Assigned %s to %s.", group.Name, app.Name)
+		return assignmentTable(group, app, true, applyHangarChange(ctx, req, client, *app.hangar, "variables")), nil
+	}
 	req.CLI.Out.Note("Assigned %s to %s. It reaches the application on its next deployment.",
 		group.Name, app.Name)
-	return assignmentTable(group, app.Name, true), nil
+	return assignmentTable(group, app, true, false), nil
 }
 
 // envGroupUnassign detaches a group from an application.
@@ -440,28 +444,40 @@ func envGroupUnassign(ctx context.Context, req Request) (output.Table, error) {
 	}
 	if assignmentID == "" {
 		req.CLI.Out.Note("%s is not assigned to %s.", group.Name, app.Name)
-		return assignmentTable(group, app.Name, false), nil
+		return assignmentTable(group, app, false, false), nil
 	}
 
 	if req.CLI.DryRun {
 		req.CLI.Out.Note("Would unassign %s from %s. Nothing was sent.", group.Name, app.Name)
-		return assignmentTable(group, app.Name, false), nil
+		return assignmentTable(group, app, false, false), nil
 	}
 
 	if err := core.UnassignEnvGroup(ctx, client, assignmentID); err != nil {
 		return output.Table{}, err
 	}
 
+	if app.hangar != nil {
+		req.CLI.Out.Note("Unassigned %s from %s.", group.Name, app.Name)
+		return assignmentTable(group, app, true, applyHangarChange(ctx, req, client, *app.hangar, "variables")), nil
+	}
 	req.CLI.Out.Note("Unassigned %s from %s. The application loses those variables on its "+
 		"next deployment.", group.Name, app.Name)
-	return assignmentTable(group, app.Name, true), nil
+	return assignmentTable(group, app, true, false), nil
 }
 
-// groupAndApp resolves the two things an assignment joins.
-func groupAndApp(ctx context.Context, req Request, verb string) (core.EnvGroup, core.App, error) {
+// groupAndApp resolves the two things an assignment joins: the group, and the
+// application or the Hangar that --hangar names.
+func groupAndApp(ctx context.Context, req Request, verb string) (core.EnvGroup, envTarget, error) {
+	if err := checkTarget(req); err != nil {
+		return core.EnvGroup{}, envTarget{}, err
+	}
 	group, err := targetEnvGroup(ctx, req, verb)
 	if err != nil {
-		return core.EnvGroup{}, core.App{}, err
+		return core.EnvGroup{}, envTarget{}, err
+	}
+	if hangarGiven(req) {
+		target, err := hangarTarget(ctx, req)
+		return group, target, err
 	}
 
 	ref := strings.TrimSpace(req.Flags.String("app"))
@@ -471,14 +487,14 @@ func groupAndApp(ctx context.Context, req Request, verb string) (core.EnvGroup, 
 		}
 	}
 	if ref == "" {
-		return core.EnvGroup{}, core.App{}, clierr.New(clierr.KindUsage, "no application given").
+		return core.EnvGroup{}, envTarget{}, clierr.New(clierr.KindUsage, "no application given").
 			WithCode("context.no_app").
 			WithHint("Name it with --app, or link the directory once and omit it.").
 			WithStep(verb+" it", "outplane", "env", "group", verb, group.Name, "--app", "<APP_NAME>")
 	}
 
 	app, err := resolveApp(ctx, req, ref)
-	return group, app, err
+	return group, envTarget{App: app}, err
 }
 
 // targetEnvGroup resolves the group argument.
@@ -620,16 +636,18 @@ func groupSingle(g core.EnvGroup, changed bool) output.Table {
 // application but the group's other users are one command away, and a CLI that
 // deploys some of them and not others is worse than one that deploys none. The
 // reader is told when the change takes effect and left to decide what to deploy.
-func assignmentTable(g core.EnvGroup, app string, changed bool) output.Table {
+// A Hangar restarts only when --restart asks for it, and only the one named.
+func assignmentTable(g core.EnvGroup, app envTarget, changed, restarted bool) output.Table {
 	return output.Table{
 		Single:  true,
 		Columns: []string{"group", "app", "changed"},
 		Total:   1,
 		Rows: []map[string]any{{
-			"group":   g.Name,
-			"groupId": g.ID,
-			"app":     app,
-			"changed": changed,
+			"group":     g.Name,
+			"groupId":   g.ID,
+			"app":       app.Name,
+			"changed":   changed,
+			"restarted": app.restarted(restarted),
 		}},
 	}
 }

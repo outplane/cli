@@ -78,8 +78,8 @@ type EnvGroupAssignment struct {
 	AppName   string `json:"appName"`
 	Variables int    `json:"variables"`
 
-	// Kind is app or hangar. A Hangar keeps the values it was created with, so
-	// a change to the group never reaches it the way it reaches an application.
+	// Kind is app or hangar. A change to the group reaches an application at
+	// its next deployment and a Hangar the next time it starts.
 	Kind string `json:"kind"`
 }
 
