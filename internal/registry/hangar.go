@@ -35,6 +35,7 @@ func init() {
 		hangarGet(),
 		hangarCreate(),
 		hangarConnect(),
+		hangarRestart(),
 		hangarDelete(),
 	)
 }
@@ -75,12 +76,19 @@ func hangarFields() []Field {
 			Type:        "array",
 			Description: "the coding agents installed, by id. Empty for a terminal-only Hangar",
 		},
-		{Name: "size", Type: "string", Description: "instance type code, e.g. op-34. Set by the platform"},
+		{Name: "size", Type: "string", Description: "instance type code, e.g. op-46. Set by the platform"},
 		{Name: "diskGb", Type: "int", Description: "the disk's size in GB. Set by the platform"},
 		{
 			Name:        "idleTimeoutMinutes",
 			Type:        "int | null",
 			Description: "the idle timeout chosen at creation, in minutes. null for never",
+		},
+		{
+			Name: "ports",
+			Type: "array",
+			Description: "the ports open for its dev servers, lowest first: {port, scheme, public, " +
+				"url, internal}. url is null on a private port; internal is name:port, where the " +
+				"team's applications reach it",
 		},
 		{Name: "createdAt", Type: "string | null", Description: "RFC 3339, UTC"},
 	}
@@ -227,7 +235,7 @@ func hangarGet() Command {
 			"Environment variables are never included, in any format, and no flag adds them.",
 		},
 
-		Related: []string{"hangar list", "hangar connect", "hangar delete", "status"},
+		Related: []string{"hangar list", "hangar connect", "hangar delete", "hangar port list", "status"},
 		DocsURL: "https://docs.outplane.com/cli/hangar",
 	}
 }
@@ -415,6 +423,111 @@ func hangarCreate() Command {
 		},
 
 		Related: []string{"hangar list", "hangar get", "hangar connect", "hangar delete", "env group list"},
+		DocsURL: "https://docs.outplane.com/cli/hangar",
+	}
+}
+
+// hangarRestart is a write, not a destructive change: the disk is the same one
+// afterwards, so it takes no confirmation, and --dry-run is how to look first.
+// What it does stop is everything running, which every declaration here says.
+func hangarRestart() Command {
+	return Command{
+		Path:  []string{"hangar", "restart"},
+		Short: "restart a Hangar on a new machine, keeping its disk",
+		Long: "Starts a Hangar again on a new machine with the same disk, pulling the Hangar " +
+			"image again.\n\n" +
+			"Everything running in its terminal stops, agents included, and anyone connected is " +
+			"disconnected. Files under /home/hangar stay. Its ports and variables are not " +
+			"touched.\n\n" +
+			"It is back in under a minute: its status reads deploying, then ready, and " +
+			"`outplane hangar connect` joins it again from then.",
+
+		Risk:         RiskWrite,
+		RequiresAuth: true,
+		Session:      SessionAny,
+
+		// Not idempotent: every restart stops whatever is running at the time.
+		Idempotent:     false,
+		SupportsDryRun: true,
+
+		APICalls: []string{
+			"GET /api/Hangar/GetHangarsByTeamId",
+			"POST /api/Hangar/RestartHangar/{hangarId}",
+		},
+
+		Args: []Arg{hangarArg()},
+
+		OutputFields: []Field{
+			{Name: "restarted", Type: "bool", Description: "false for a dry run"},
+			{Name: "hangar", Type: "string", Description: "the Hangar's immutable name"},
+			{Name: "hangarId", Type: "string"},
+		},
+
+		ErrorCodes: []string{
+			"hangar.not_running",
+			"hangar.not_found",
+			"hangar.ambiguous",
+			"usage.missing_argument",
+			"usage.empty_argument",
+			"context.no_team",
+		},
+		ExitCodes: []int{0, 2, 3, 5, 6, 8},
+
+		Examples: []Example{
+			{
+				Title:        "see what a restart would stop, without sending it",
+				Command:      "outplane hangar restart myhangar --dry-run --json",
+				Argv:         []string{"outplane", "hangar", "restart", "myhangar", "--dry-run", "--json"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{"restarted": false, "hangar": "myhangar"},
+			},
+			{
+				Title:        "restart a Hangar",
+				Command:      "outplane hangar restart myhangar",
+				Argv:         []string{"outplane", "hangar", "restart", "myhangar"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:        "restart one and read the result in a pipeline",
+				Command:      "outplane hangar restart myhangar --json --fields restarted,hangar",
+				Argv:         []string{"outplane", "hangar", "restart", "myhangar", "--json", "--fields", "restarted,hangar"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{"restarted": true, "hangar": "myhangar"},
+			},
+			{
+				Title:   "restart one in another team",
+				Command: "outplane hangar restart myhangar --team acme",
+				Argv:    []string{"outplane", "hangar", "restart", "myhangar", "--team", "acme"},
+				Placeholders: map[string]string{
+					"myhangar": "<HANGAR_NAME>",
+					"acme":     "<TEAM_SLUG>",
+				},
+				Risk: RiskWrite,
+			},
+		},
+
+		AutomationNotes: []string{
+			"Everything running in the Hangar's terminal stops, agents included, and anyone " +
+				"connected is disconnected. Files under /home/hangar stay, on the same disk, and " +
+				"its ports and variables are not touched.",
+			"The command returns once the restart is accepted, not once the Hangar is back. It is " +
+				"back in under a minute: poll `outplane hangar get <name> --json --fields status` " +
+				"until it has read deploying and then ready; a ready in the first few seconds can " +
+				"still be the state from before the restart. `hangar connect` is refused with " +
+				"hangar.not_running until then.",
+			"Exit 6 with hangar.not_running means nothing is running to restart, for example a " +
+				"Hangar that never started or one that is paused. Nothing changed, and retrying " +
+				"does not help.",
+			"Not idempotent: each restart stops whatever is running at the time. Under --dry-run " +
+				"nothing is sent and restarted is false.",
+			"It takes no confirmation, because the disk is the same one afterwards. `hangar " +
+				"delete` is the command that removes it.",
+		},
+
+		Related: []string{"hangar get", "hangar connect", "hangar list", "hangar delete"},
 		DocsURL: "https://docs.outplane.com/cli/hangar",
 	}
 }

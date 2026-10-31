@@ -155,7 +155,7 @@ func QueryUsage(ctx context.Context, c *api.Client, base string, apps []App) ([]
 	}
 
 	for _, q := range usageQueries() {
-		samples, err := promInstant(ctx, c, base, q.query)
+		samples, err := promInstant(ctx, c, base, q.query, "app_name")
 		if err != nil {
 			// Which metric failed goes in a detail rather than in the message.
 			// Wrapping with fmt.Errorf hid the typed error underneath, so the
@@ -195,6 +195,82 @@ func percentOf(used, limit float64) *int {
 	return &p
 }
 
+// Volume usage.
+//
+// A disk is reported against its claim, and a claim is named pvc-{volumeId},
+// so the claim name without its prefix is the volume id. The queries are the
+// console's, for the console's reasons:
+//
+//   - A volume is reported only while a running instance mounts it, so the
+//     last sample is carried forward for seven days. A disk that is not
+//     mounted keeps the fill it had, which is still true: nothing is writing
+//     to it.
+//   - A disk that moved node leaves a frozen series on every node it left. Used
+//     space is read from the last five minutes first, which is the node it is on
+//     now, and from the frozen series only when there is no live one. The
+//     largest frozen value can be a peak that has since been freed, and would
+//     read as a full disk for a week.
+//   - Capacity does not change, so the largest value in the window is exact.
+const (
+	volumeUsedQuery = `max by (namespace, persistentvolumeclaim) (last_over_time(kubelet_volume_stats_used_bytes[5m]))` +
+		` or ` +
+		`max by (namespace, persistentvolumeclaim) (last_over_time(kubelet_volume_stats_used_bytes[7d]))`
+	volumeCapacityQuery = `max by (namespace, persistentvolumeclaim) (last_over_time(kubelet_volume_stats_capacity_bytes[7d]))`
+)
+
+// VolumeUsage is one volume's last known fill.
+type VolumeUsage struct {
+	UsedBytes     int64
+	CapacityBytes int64
+
+	// Percent is nil when the capacity is not known, as for Usage.
+	Percent *int
+}
+
+// QueryVolumeUsage reports the last known fill of every volume in the team, by
+// volume id.
+//
+// A volume with no sample in the window is absent rather than zero. One that
+// has never been mounted has not been measured, which is not the same as empty.
+func QueryVolumeUsage(ctx context.Context, c *api.Client, base string) (map[string]VolumeUsage, error) {
+	queries := []struct {
+		name  string
+		query string
+		apply func(*VolumeUsage, float64)
+	}{
+		{"disk used", volumeUsedQuery, func(u *VolumeUsage, v float64) { u.UsedBytes = int64(v) }},
+		{"disk capacity", volumeCapacityQuery, func(u *VolumeUsage, v float64) { u.CapacityBytes = int64(v) }},
+	}
+
+	out := map[string]VolumeUsage{}
+	for _, q := range queries {
+		samples, err := promInstant(ctx, c, base, q.query, "persistentvolumeclaim")
+		if err != nil {
+			if e := clierr.AsError(err); e != nil {
+				return nil, e.WithDetail("metric", q.name)
+			}
+			return nil, err
+		}
+		for claim, v := range samples {
+			id := volumeID(claim)
+			u := out[id]
+			q.apply(&u, v)
+			out[id] = u
+		}
+	}
+
+	for id, u := range out {
+		u.Percent = percentOf(float64(u.UsedBytes), float64(u.CapacityBytes))
+		out[id] = u
+	}
+	return out, nil
+}
+
+// volumeID is the volume id a claim was named after.
+func volumeID(claim string) string {
+	return strings.ToLower(strings.TrimPrefix(claim, "pvc-"))
+}
+
 // promResponse is the metrics gateway's own envelope, which is not the API's.
 type promResponse struct {
 	Status string `json:"status"`
@@ -208,7 +284,8 @@ type promResponse struct {
 	} `json:"data"`
 }
 
-// promInstant runs one instant query and returns a value per application.
+// promInstant runs one instant query and returns a value for each value of
+// label: an application for usage, a claim for a volume.
 //
 // A sample the CLI cannot use is dropped rather than reported. Three shapes get
 // here and none of them is a reading:
@@ -220,9 +297,10 @@ type promResponse struct {
 //   - a negative value, which no counter rate or byte count can be.
 //
 // Dropping one leaves the application at zero, the same as an application with
-// nothing running. That is a real loss of nuance and still the better trade: a
-// missing reading reads as idle, while a fabricated one reads as an emergency.
-func promInstant(ctx context.Context, c *api.Client, base, query string) (map[string]float64, error) {
+// nothing running, and leaves a volume absent, the same as one never measured.
+// That is a real loss of nuance and still the better trade: a missing reading
+// reads as idle, while a fabricated one reads as an emergency.
+func promInstant(ctx context.Context, c *api.Client, base, query, label string) (map[string]float64, error) {
 	path := fmt.Sprintf("%s/api/v1/query?%s",
 		strings.TrimRight(base, "/"), url.Values{"query": {query}}.Encode())
 
@@ -249,8 +327,8 @@ func promInstant(ctx context.Context, c *api.Client, base, query string) (map[st
 
 	out := make(map[string]float64, len(resp.Data.Result))
 	for _, r := range resp.Data.Result {
-		app := r.Metric["app_name"]
-		if app == "" || len(r.Value) != 2 {
+		key := r.Metric[label]
+		if key == "" || len(r.Value) != 2 {
 			continue
 		}
 		var text string
@@ -261,7 +339,7 @@ func promInstant(ctx context.Context, c *api.Client, base, query string) (map[st
 		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
 			continue
 		}
-		out[app] = v
+		out[key] = v
 	}
 	return out, nil
 }

@@ -142,6 +142,98 @@ func TestDecodeHangar(t *testing.T) {
 	}
 }
 
+// The disk id is what the disk's usage is looked up by, so it is compared in
+// one case, and the empty GUID the server sends for no disk is no disk.
+func TestDecodeHangarDiskAndLimits(t *testing.T) {
+	var d hangarDTO
+	raw := `{"name":"workbench","instanceType":"op-34","diskId":"0A1B2C3D-0000-4000-8000-00000000000A",` +
+		`"cpuLimitMillicores":1000,"memoryLimitMb":2048}`
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		t.Fatal(err)
+	}
+
+	h := decodeHangar(d)
+	if h.DiskID != "0a1b2c3d-0000-4000-8000-00000000000a" {
+		t.Errorf("disk id %q, want it lower case", h.DiskID)
+	}
+	if h.CPULimitMillicores != 1000 || h.MemoryLimitMB != 2048 {
+		t.Errorf("limits %d mc %d MB", h.CPULimitMillicores, h.MemoryLimitMB)
+	}
+
+	d.DiskID = noDiskID
+	if got := decodeHangar(d).DiskID; got != "" {
+		t.Errorf("disk id %q, want none for the empty GUID", got)
+	}
+}
+
+// Every port has an internal address and only a public one has an outside
+// one, whatever the server sent, and the set comes out lowest first and never
+// as null.
+func TestDecodeHangarPorts(t *testing.T) {
+	var d hangarDTO
+	raw := `{"name":"workbench","ports":[` +
+		`{"port":5432,"scheme":30,"isPublic":true,"publicUrl":"gate.example.test:30001"},` +
+		`{"port":3000,"scheme":10,"isPublic":false,"publicUrl":"https://stale.example.test"}]}`
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		t.Fatal(err)
+	}
+
+	got := decodeHangar(d).Ports
+	want := []HangarPort{
+		{Port: 3000, Scheme: "http", Internal: "workbench:3000"},
+		{Port: 5432, Scheme: "tcp", Public: true, URL: "gate.example.test:30001", Internal: "workbench:5432"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	if ports := decodeHangar(hangarDTO{Name: "workbench"}).Ports; ports == nil || len(ports) != 0 {
+		t.Errorf("ports %#v, want an empty list", ports)
+	}
+}
+
+func TestCheckHangarPorts(t *testing.T) {
+	cases := []struct {
+		name  string
+		ports []NewPort
+		code  string
+	}{
+		{"none at all", nil, ""},
+		{"the most there can be", []NewPort{{Port: 3000, Scheme: "http"}, {Port: 5173, Scheme: "h2c"}, {Port: 5432, Scheme: "tcp", Public: true}}, ""},
+		{"one too many", []NewPort{{Port: 3000, Scheme: "http"}, {Port: 3001, Scheme: "http"}, {Port: 3002, Scheme: "http"}, {Port: 3003, Scheme: "http"}}, "hangar.port_limit"},
+		{"the Hangar's own", []NewPort{{Port: HangarOwnPort, Scheme: "http"}}, "hangar.port_reserved"},
+		{"out of range", []NewPort{{Port: 65536, Scheme: "http"}}, "hangar.port_invalid"},
+		{"zero", []NewPort{{Port: 0, Scheme: "http"}}, "hangar.port_invalid"},
+		{"unknown scheme", []NewPort{{Port: 3000, Scheme: "https"}}, "hangar.scheme_invalid"},
+		{"a scheme the server sent and this release does not know", []NewPort{{Port: 3000, Scheme: "unknown:40"}}, "hangar.scheme_invalid"},
+		{"twice", []NewPort{{Port: 3000, Scheme: "http"}, {Port: 3000, Scheme: "tcp"}}, "hangar.port_duplicate"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckHangarPorts(tc.ports)
+			if tc.code == "" {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				return
+			}
+			e := clierr.AsError(err)
+			if e == nil {
+				t.Fatalf("accepted, want %s", tc.code)
+			}
+			if e.Code != tc.code || e.Kind != clierr.KindUsage {
+				t.Errorf("code %q kind %q, want %q usage (%v)", e.Code, e.Kind, tc.code, e)
+			}
+		})
+	}
+}
+
 // The registry publishes the agent catalog and the idle timeouts as enums, and
 // cannot import this package to read them. This keeps the two in step.
 func TestHangarCatalogMatchesTheRegistry(t *testing.T) {

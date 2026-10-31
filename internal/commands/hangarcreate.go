@@ -261,7 +261,8 @@ func describeNewHangar(req Request, spec core.NewHangar, groups []string) {
 }
 
 // plannedHangarRow is the row a dry run reports. What only the server decides,
-// the id, the state, the size and the disk, is null rather than guessed.
+// the id, the state, the size and the disk, is null rather than guessed. A new
+// Hangar has no ports open.
 func plannedHangarRow(spec core.NewHangar) map[string]any {
 	var idle any
 	if spec.IdleTimeoutMinutes != nil {
@@ -277,6 +278,7 @@ func plannedHangarRow(spec core.NewHangar) map[string]any {
 		"size":               nil,
 		"diskGb":             nil,
 		"idleTimeoutMinutes": idle,
+		"ports":              []map[string]any{},
 		"createdAt":          nil,
 	}
 }

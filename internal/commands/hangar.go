@@ -77,6 +77,7 @@ func hangarRow(h core.Hangar) map[string]any {
 		"size":               h.Size,
 		"diskGb":             h.DiskGB,
 		"idleTimeoutMinutes": idle,
+		"ports":              hangarPortRows(h.Ports),
 		"createdAt":          nilIfEmpty(h.CreatedAt),
 	}
 }

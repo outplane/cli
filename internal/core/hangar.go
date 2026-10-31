@@ -41,11 +41,41 @@ type Hangar struct {
 	Size   string `json:"size"`
 	DiskGB int    `json:"diskGb"`
 
+	// DiskID is the home disk's volume id, which its disk usage is keyed by.
+	// Empty when the server names none.
+	DiskID string `json:"diskId"`
+
+	// CPULimitMillicores and MemoryLimitMB are what its size allows, as on an
+	// application. Zero when the server does not say.
+	CPULimitMillicores int `json:"cpuLimitMillicores"`
+	MemoryLimitMB      int `json:"memoryLimitMb"`
+
 	// IdleTimeoutMinutes is nil for never. A pointer, because zero minutes and
 	// never are different answers.
 	IdleTimeoutMinutes *int `json:"idleTimeoutMinutes"`
 
+	// Ports are what its dev servers are reached on, lowest first. Never nil.
+	Ports []HangarPort `json:"ports"`
+
 	CreatedAt string `json:"createdAt"`
+}
+
+// HangarPort is one port a Hangar has open for its dev servers.
+//
+// It is an application's port with one address more. The team's applications
+// reach a Hangar by its name, so every open port has an internal address,
+// public or not, and a public one has an outside address besides.
+type HangarPort struct {
+	Port   int    `json:"port"`
+	Scheme string `json:"scheme"`
+	Public bool   `json:"public"`
+
+	// URL is the outside address, present only while the port is public: an
+	// https address for http and h2c, a host and a port number for tcp.
+	URL string `json:"url"`
+
+	// Internal is {name}:{port}, where the team's applications reach it.
+	Internal string `json:"internal"`
 }
 
 // hangarDTO is the wire shape of a Hangar, which the list, the detail and
@@ -62,9 +92,27 @@ type hangarDTO struct {
 	Agents             []string `json:"agents"`
 	InstanceType       string   `json:"instanceType"`
 	DiskSizeInGb       int      `json:"diskSizeInGb"`
+	DiskID             string   `json:"diskId"`
+	CPULimitMillicores int      `json:"cpuLimitMillicores"`
+	MemoryLimitMB      int      `json:"memoryLimitMb"`
 	IdleTimeoutMinutes *int     `json:"idleTimeoutMinutes"`
 	CreatedDate        string   `json:"createdDate"`
+
+	Ports []hangarPortDTO `json:"ports"`
 }
+
+// hangarPortDTO is the part of an AppPortDto a Hangar's port needs. Scheme is
+// an EndpointScheme, as an integer.
+type hangarPortDTO struct {
+	Port      int    `json:"port"`
+	Scheme    int    `json:"scheme"`
+	IsPublic  bool   `json:"isPublic"`
+	PublicURL string `json:"publicUrl"`
+}
+
+// noDiskID is the empty GUID. The disk id is not optional on the wire, so a
+// Hangar with no home disk on record arrives with this rather than without one.
+const noDiskID = "00000000-0000-0000-0000-000000000000"
 
 func decodeHangar(d hangarDTO) Hangar {
 	status := deploymentStatusNames.name(d.Status)
@@ -79,6 +127,11 @@ func decodeHangar(d hangarDTO) Hangar {
 		agents = []string{}
 	}
 
+	diskID := strings.ToLower(d.DiskID)
+	if diskID == noDiskID {
+		diskID = ""
+	}
+
 	return Hangar{
 		ID:                 d.ID,
 		Name:               d.Name,
@@ -88,9 +141,44 @@ func decodeHangar(d hangarDTO) Hangar {
 		Agents:             agents,
 		Size:               d.InstanceType,
 		DiskGB:             d.DiskSizeInGb,
+		DiskID:             diskID,
+		CPULimitMillicores: d.CPULimitMillicores,
+		MemoryLimitMB:      d.MemoryLimitMB,
 		IdleTimeoutMinutes: d.IdleTimeoutMinutes,
+		Ports:              decodeHangarPorts(d.Name, d.Ports),
 		CreatedAt:          serverInstant(d.CreatedDate),
 	}
+}
+
+// decodeHangarPorts sorts as well, so that every caller sees the set lowest
+// first whatever order a response used.
+func decodeHangarPorts(name string, dtos []hangarPortDTO) []HangarPort {
+	ports := make([]HangarPort, 0, len(dtos))
+	for _, d := range dtos {
+		p := HangarPort{
+			Port:     d.Port,
+			Scheme:   schemeNames.name(d.Scheme),
+			Public:   d.IsPublic,
+			Internal: fmt.Sprintf("%s:%d", name, d.Port),
+		}
+		if d.IsPublic {
+			p.URL = d.PublicURL
+		}
+		ports = append(ports, p)
+	}
+	sort.Slice(ports, func(i, j int) bool { return ports[i].Port < ports[j].Port })
+	return ports
+}
+
+// Endpoints is the Hangar's ports in the shape MergePorts and WithoutPorts
+// read, so that a Hangar's set changes by exactly the rules an application's
+// does.
+func (h Hangar) Endpoints() []Endpoint {
+	out := make([]Endpoint, 0, len(h.Ports))
+	for _, p := range h.Ports {
+		out = append(out, Endpoint{Port: p.Port, Scheme: p.Scheme, Public: p.Public, URL: p.URL})
+	}
+	return out
 }
 
 // ListHangars returns every Hangar in the current team. Like the application
@@ -273,6 +361,73 @@ func (h NewHangar) body() map[string]any {
 		"envVariableGroupIds":  groups,
 		"idleTimeoutMinutes":   h.IdleTimeoutMinutes,
 	}
+}
+
+// A Hangar's ports.
+//
+// The endpoint replaces the whole set, as an application's does, so callers
+// send MergePorts' or WithoutPorts' result rather than the ports they named.
+// What differs is the effect. The server rewrites the Hangar's routing alone
+// and restarts nothing, so a save is live within seconds and the terminal
+// session and the agents in it carry on. There is no deployment to start.
+
+// HangarMaxPorts is how many ports a Hangar can have open at once.
+const HangarMaxPorts = 3
+
+// HangarOwnPort is the port the Hangar itself uses. It is never one a dev
+// server can be reached on.
+const HangarOwnPort = 7070
+
+// SetHangarPorts replaces a Hangar's ports with exactly this set and returns
+// what was saved, with the addresses the server assigned.
+func SetHangarPorts(ctx context.Context, c *api.Client, h Hangar, ports []NewPort) ([]HangarPort, error) {
+	var saved []hangarPortDTO
+	body := map[string]any{"ports": portBodies(ports)}
+	if err := c.Put(ctx, "/Hangar/UpdateHangarPorts/"+h.ID, body, &saved); err != nil {
+		return nil, err
+	}
+	return decodeHangarPorts(h.Name, saved), nil
+}
+
+// CheckHangarPorts reports the first thing the server would refuse in a set
+// about to be sent: an application's rules, then a Hangar's own two.
+//
+// It takes the whole set rather than the ports named, because the limit is on
+// the whole set. A port carried over with a scheme this release does not know
+// is refused too, rather than sent back as a guess.
+func CheckHangarPorts(ports []NewPort) error {
+	seen := make(map[int]bool, len(ports))
+	for _, p := range ports {
+		switch {
+		case p.Port < 1 || p.Port > 65535:
+			return usage(fmt.Sprintf("%d is not a port", p.Port), "hangar.port_invalid",
+				"A port is a number from 1 to 65535.")
+		case !contains(Schemes, p.Scheme):
+			return usage(fmt.Sprintf("no scheme called %q", p.Scheme), "hangar.scheme_invalid",
+				"Use one of: %s.", strings.Join(Schemes, ", "))
+		case seen[p.Port]:
+			return usage(fmt.Sprintf("port %d was given twice", p.Port), "hangar.port_duplicate", "")
+		case p.Port == HangarOwnPort:
+			return usage(fmt.Sprintf("port %d is the Hangar's own", p.Port), "hangar.port_reserved",
+				"The Hangar itself uses it, so a dev server has to listen on another one.")
+		}
+		seen[p.Port] = true
+	}
+	if len(ports) > HangarMaxPorts {
+		return usage(fmt.Sprintf("that would leave %d ports open, and a Hangar can have %d", len(ports), HangarMaxPorts),
+			"hangar.port_limit", "Closing one makes room for another.")
+	}
+	return nil
+}
+
+// RestartHangar starts a Hangar again on a new machine with the same disk.
+//
+// The request carries nothing and changes nothing on the record, so its ports,
+// variables and idle timeout are as they were. What stops is everything that
+// runs, the session and its agents included. A Hangar with nothing running is
+// refused with a conflict, because there is nothing to restart.
+func RestartHangar(ctx context.Context, c *api.Client, id string) error {
+	return c.Post(ctx, "/Hangar/RestartHangar/"+id, nil, nil)
 }
 
 // DeleteHangar removes a Hangar and its disk.
