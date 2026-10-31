@@ -51,7 +51,11 @@ func appShell(ctx context.Context, req Request) (output.Table, error) {
 		return shellTable(app, instance, command, false), nil
 	}
 
-	if err := requireTerminal(req); err != nil {
+	if err := requireTerminal(req,
+		clierr.Step{Why: "see what a session would open", Argv: []string{"outplane", "app", "shell", "--dry-run"}},
+		clierr.Step{Why: "read what the instance is printing", Argv: []string{"outplane", "logs", "<APP_NAME>"}},
+		clierr.Step{Why: "see what is running", Argv: []string{"outplane", "app", "instances", "<APP_NAME>"}},
+	); err != nil {
 		return output.Table{}, err
 	}
 
@@ -157,19 +161,29 @@ func watchSize(ctx context.Context, session *core.Shell, fd int) {
 
 // requireTerminal refuses a session that would have nowhere to run.
 //
-// A shell needs a keyboard at one end and a screen at the other. Behind a pipe
-// there is neither, and opening one anyway would leave a session on a running
-// instance that nothing can type into and nothing can close.
-func requireTerminal(req Request) error {
+// A terminal session needs a keyboard at one end and a screen at the other.
+// Behind a pipe there is neither, and opening one anyway would leave a session
+// that nothing can type into and nothing can close.
+//
+// The steps are the calling command's own. dryRun is its --dry-run, offered in
+// every case. instead are the commands that read the same things without a
+// terminal, offered under an agent harness, which can run them; a session with
+// no such commands offers none and does not claim to.
+func requireTerminal(req Request, dryRun clierr.Step, instead ...clierr.Step) error {
 	if harness := req.CLI.Exec.AgentHarness; harness != "" {
-		return clierr.New(clierr.KindUsage, "an interactive shell cannot run under %s", harness).
+		hint := "A shell is a terminal session: it has no transcript, no exit status " +
+			"and no limit on what it can do."
+		if len(instead) > 0 {
+			hint = strings.TrimSuffix(hint, ".") + " to a running instance. " +
+				"Everything it could be used to read has a command of its own."
+		}
+		e := clierr.New(clierr.KindUsage, "an interactive shell cannot run under %s", harness).
 			WithCode("shell.not_interactive").
-			WithHint("A shell is a terminal session: it has no transcript, no exit status "+
-				"and no limit on what it can do to a running instance. Everything it "+
-				"could be used to read has a command of its own.").
-			WithStep("read what the instance is printing", "outplane", "logs", "<APP_NAME>").
-			WithStep("see what is running", "outplane", "app", "instances", "<APP_NAME>").
-			WithStep("see what a session would open", "outplane", "app", "shell", "--dry-run")
+			WithHint("%s", hint)
+		for _, step := range instead {
+			e = e.WithStep(step.Why, step.Argv...)
+		}
+		return e.WithStep(dryRun.Why, dryRun.Argv...)
 	}
 
 	if !req.CLI.Exec.StdinTTY || !req.CLI.Exec.StdoutTTY {
@@ -178,7 +192,7 @@ func requireTerminal(req Request) error {
 			WithHint("Standard input or output is not a terminal, so there is nothing to "+
 				"type with and nothing to draw on. A session cannot be piped, redirected "+
 				"or run from a script.").
-			WithStep("see what a session would open", "outplane", "app", "shell", "--dry-run")
+			WithStep(dryRun.Why, dryRun.Argv...)
 	}
 	return nil
 }

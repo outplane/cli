@@ -37,9 +37,10 @@ by its owner, and `outplane status` says which of the two answered.
 
 ## What it covers
 
-85 commands, over applications, deployments, environment variables, ports,
+94 commands, over applications, deployments, environment variables, ports,
 build settings, custom domains, volumes, managed PostgreSQL, IP access
-profiles, registry credentials, logs, requests and metrics.
+profiles, registry credentials, logs, requests and metrics, and Hangars for
+coding agents.
 
 `outplane --help` lists them. Every one has its own help, with runnable
 examples.

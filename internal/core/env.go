@@ -108,7 +108,7 @@ const (
 // not: an application may set its own, and refusing it would break the most
 // commonly set variable there is.
 var (
-	reservedPrefixes = []string{"OP_", "KUBERNETES_"}
+	reservedPrefixes = []string{"OP_", "KUBERNETES_", "HANGAR_"}
 	reservedKeys     = []string{"HOSTNAME"}
 )
 

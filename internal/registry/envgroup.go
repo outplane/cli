@@ -144,7 +144,7 @@ func envGroupGet() Command {
 			},
 			{
 				Name: "apps", Type: "bool", Default: "false",
-				Description: "list the applications using the group instead of its variables",
+				Description: "list the applications and Hangars using the group instead of its variables",
 			},
 		},
 
@@ -153,7 +153,12 @@ func envGroupGet() Command {
 			{Name: "value", Type: "string", Description: "masked unless --reveal was given"},
 			{Name: "revealed", Type: "bool"},
 			{Name: "length", Type: "int", Description: "accurate whether or not the value is shown"},
-			{Name: "app", Type: "string", Description: "with --apps: an application using the group"},
+			{Name: "app", Type: "string", Description: "with --apps: an application or a Hangar using the group"},
+			{
+				Name: "kind", Type: "string",
+				Description: "with --apps: app or hangar. A Hangar keeps the values it was created " +
+					"with, so a change to the group never reaches it",
+			},
 			{Name: "appId", Type: "string", Description: "with --apps"},
 			{Name: "assignmentId", Type: "string", Description: "with --apps: the record that joins them"},
 		},
@@ -290,7 +295,7 @@ func envGroupCreate() Command {
 				"neither at build nor at runtime, which is a mistake that looks like working " +
 				"configuration.",
 			"The same reserved keys apply as anywhere else: HOSTNAME, and anything starting " +
-				"with OP_ or KUBERNETES_.",
+				"with OP_, KUBERNETES_ or HANGAR_.",
 		},
 
 		Related: []string{"env group assign", "env group set", "env group list"},

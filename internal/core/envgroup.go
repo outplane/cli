@@ -77,7 +77,15 @@ type EnvGroupAssignment struct {
 	AppID     string `json:"appId"`
 	AppName   string `json:"appName"`
 	Variables int    `json:"variables"`
+
+	// Kind is app or hangar. A Hangar keeps the values it was created with, so
+	// a change to the group never reaches it the way it reaches an application.
+	Kind string `json:"kind"`
 }
+
+// hangarAppType is the API's AppType for a Hangar, which it sends with each
+// assignment because groups link to applications and Hangars alike.
+const hangarAppType = 20
 
 type assignmentDTO struct {
 	AssignmentID         string `json:"assignmentId"`
@@ -85,6 +93,7 @@ type assignmentDTO struct {
 	EnvVariableGroupName string `json:"envVariableGroupName"`
 	AppID                string `json:"appId"`
 	AppName              string `json:"appName"`
+	AppType              int    `json:"appType"`
 	VariableCount        int    `json:"variableCount"`
 }
 
@@ -139,7 +148,12 @@ func decodeEnvGroup(d envGroupDTO) EnvGroup {
 }
 
 func decodeAssignment(d assignmentDTO) EnvGroupAssignment {
+	kind := "app"
+	if d.AppType == hangarAppType {
+		kind = "hangar"
+	}
 	return EnvGroupAssignment{
+		Kind:      kind,
 		ID:        d.AssignmentID,
 		GroupID:   d.EnvVariableGroupID,
 		GroupName: d.EnvVariableGroupName,

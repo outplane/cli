@@ -15,7 +15,8 @@ import (
 	"github.com/outplane/cli/internal/clierr"
 )
 
-// An interactive shell on one running instance.
+// An interactive terminal session: a shell on one running instance, or the
+// session a Hangar keeps running.
 //
 // This is the only part of the CLI that is a conversation rather than a
 // request. Bytes travel both ways for as long as somebody keeps typing, and
@@ -32,10 +33,10 @@ import (
 //   - Input is a control frame and output is raw bytes. The asymmetry is the
 //     server's: it has to tell a keystroke from a resize, and it has nothing to
 //     add to output that the bytes do not already say.
-//   - The command is split by the server, quotes respected, and executed
-//     directly rather than through a shell. Shell syntax needs an explicit
-//     `sh -c "..."`, which is what somebody types rather than something this
-//     wraps around them.
+//   - A command, where one is asked for, is split by the server, quotes
+//     respected, and executed directly rather than through a shell. Shell
+//     syntax needs an explicit `sh -c "..."`, which is what somebody types
+//     rather than something this wraps around them.
 
 const (
 	// DefaultShellCommand is what the platform runs when nothing is asked for.
@@ -53,19 +54,22 @@ const (
 
 	// shellKeepalive is how often an idle session proves it is still there.
 	//
-	// A shell can sit untouched for an hour and has to still work afterwards.
+	// A session can sit untouched for an hour and has to still work afterwards.
 	// Nothing in the protocol says anything during that hour, and something in
 	// between will eventually reclaim a connection that looks abandoned. The
 	// first sign would be a terminal that quietly stops answering.
 	shellKeepalive = 30 * time.Second
 )
 
-// Shell is a live session on one instance.
+// Shell is a live terminal session, on an instance or in a Hangar.
 type Shell struct {
 	conn *websocket.Conn
 
 	// pending holds a character that arrived in pieces. See Send.
 	pending []byte
+
+	// lostHint is the advice a broken session ends with. See dialShell.
+	lostHint string
 }
 
 // clientFrame is what this end sends. The server understands two kinds and
@@ -95,19 +99,30 @@ func OpenShell(ctx context.Context, c *api.Client, appID, instance, command stri
 		query.Set("command", command)
 	}
 
-	conn, err := c.Dial(ctx, "/AppShell/Connect/"+appID, query, shellSubprotocol)
+	return dialShell(ctx, c, appID, query,
+		"The instance may have restarted or been replaced by a deployment. "+
+			"Nothing typed after the disconnection reached it.")
+}
+
+// dialShell opens the socket behind a session.
+//
+// lostHint is what the reader is told if the session breaks. What to do next
+// depends on what was at the far end, and an instance replaced by a deployment
+// is not the same loss as a Hangar that stopped.
+func dialShell(ctx context.Context, c *api.Client, id string, query url.Values, lostHint string) (*Shell, error) {
+	conn, err := c.Dial(ctx, "/AppShell/Connect/"+id, query, shellSubprotocol)
 	if err != nil {
 		return nil, err
 	}
 
 	// A terminal produces bursts larger than the library's default limit: the
-	// server forwards whatever it read from the instance in one go, and `cat`
+	// server forwards whatever it read from the far end in one go, and `cat`
 	// of a large file is one go. There is nothing to protect by capping it. The
 	// far end is the caller's own process and the bytes are on their way to the
 	// caller's own screen.
 	conn.SetReadLimit(-1)
 
-	return &Shell{conn: conn}, nil
+	return &Shell{conn: conn, lostHint: lostHint}, nil
 }
 
 // Send forwards keystrokes to the far end.
@@ -169,7 +184,7 @@ func (s *Shell) Stream(ctx context.Context, w io.Writer) error {
 			if closedNormally(err) {
 				return nil
 			}
-			return shellError(ctx, err, "the session ended unexpectedly")
+			return shellError(ctx, err, "the session ended unexpectedly", s.lostHint)
 		}
 		if _, err := io.Copy(w, r); err != nil {
 			return clierr.New(clierr.KindInternal, "could not write to the terminal: %v", err)
@@ -214,14 +229,14 @@ func (s *Shell) write(ctx context.Context, frame clientFrame) error {
 		if closedNormally(err) {
 			return nil
 		}
-		return shellError(ctx, err, "the session ended while sending")
+		return shellError(ctx, err, "the session ended while sending", s.lostHint)
 	}
 	return nil
 }
 
-// closedNormally reports a session that ended by itself: the shell exited, or
-// the instance went away and the server closed the bridge behind it. Both are
-// how a session is meant to end, so neither is a failure.
+// closedNormally reports a session that ended by itself: the program on the far
+// end exited or detached, or what it ran on went away and the server closed the
+// bridge behind it. All are how a session is meant to end, so none is a failure.
 //
 // An abnormal closure is not included. A connection that died without saying
 // goodbye is exactly the case worth reporting, because from the reader's side
@@ -235,14 +250,13 @@ func closedNormally(err error) bool {
 }
 
 // shellError explains a broken session, unless the reader broke it.
-func shellError(ctx context.Context, err error, what string) error {
+func shellError(ctx context.Context, err error, what, hint string) error {
 	if e := clierr.Cancelled(ctx, "interrupted"); e != nil {
 		return e
 	}
 	return clierr.New(clierr.KindUpstream, "%s: %v", what, err).
 		WithCode("shell.disconnected").
-		WithHint("The instance may have restarted or been replaced by a deployment. " +
-			"Nothing typed after the disconnection reached it.")
+		WithHint("%s", hint)
 }
 
 // incompleteRune reports how many trailing bytes begin a character that has not

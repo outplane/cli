@@ -98,20 +98,28 @@ func envGroupGet(ctx context.Context, req Request) (output.Table, error) {
 	return table, nil
 }
 
-// assignedAppsTable lists the applications using a group.
+// assignedAppsTable lists the applications, and the Hangars, using a group.
 func assignedAppsTable(g core.EnvGroup) output.Table {
 	table := output.Table{
-		Columns: []string{"app", "appId"},
+		Columns: []string{"app", "kind", "appId"},
 		Total:   len(g.AssignedApps),
 	}
+	hangars := false
 	for _, a := range g.AssignedApps {
 		table.Rows = append(table.Rows, map[string]any{
 			"app":          a.AppName,
+			"kind":         a.Kind,
 			"appId":        a.AppID,
 			"assignmentId": a.ID,
 		})
+		hangars = hangars || a.Kind == "hangar"
 	}
-	if len(g.AssignedApps) > 0 {
+	switch {
+	case hangars:
+		table.Footer = "Each application here picks up a change to " + g.Name +
+			" at its next deployment, and nothing deploys them for you. A Hangar keeps the " +
+			"values it was created with."
+	case len(g.AssignedApps) > 0:
 		table.Footer = "Each of these picks up a change to " + g.Name +
 			" at its next deployment. Nothing deploys them for you."
 	}
@@ -487,12 +495,19 @@ func targetEnvGroup(ctx context.Context, req Request, verb string) (core.EnvGrou
 			WithHint("This is what an unset variable looks like.")
 	}
 
+	return resolveEnvGroup(ctx, req, req.Args[0])
+}
+
+// resolveEnvGroup turns a group's name or id into the group, translating the
+// domain errors. It is targetEnvGroup for a reference that arrives in a flag
+// rather than as the first argument.
+func resolveEnvGroup(ctx context.Context, req Request, ref string) (core.EnvGroup, error) {
 	client, err := req.CLI.APIClient()
 	if err != nil {
 		return core.EnvGroup{}, err
 	}
 
-	group, err := core.FindEnvGroup(ctx, client, req.Args[0])
+	group, err := core.FindEnvGroup(ctx, client, ref)
 	if err == nil {
 		return group, nil
 	}

@@ -312,7 +312,7 @@ func envSet() Command {
 				"cannot drop a variable it was not told about.",
 			"A value may contain an equals sign: only the first one separates the key, so " +
 				"KEY=a=b sets KEY to a=b.",
-			"HOSTNAME and any key starting with OP_ or KUBERNETES_ are refused. PORT is not " +
+			"HOSTNAME and any key starting with OP_, KUBERNETES_ or HANGAR_ are refused. PORT is not " +
 				"reserved and may be set.",
 			"Setting an existing key replaces it, so running this twice with the same " +
 				"arguments leaves the same state.",
