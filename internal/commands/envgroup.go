@@ -638,9 +638,13 @@ func groupSingle(g core.EnvGroup, changed bool) output.Table {
 // reader is told when the change takes effect and left to decide what to deploy.
 // A Hangar restarts only when --restart asks for it, and only the one named.
 func assignmentTable(g core.EnvGroup, app envTarget, changed, restarted bool) output.Table {
+	columns := []string{"group", "app", "changed"}
+	if app.hangar != nil {
+		columns = append(columns, "restarted")
+	}
 	return output.Table{
 		Single:  true,
-		Columns: []string{"group", "app", "changed"},
+		Columns: columns,
 		Total:   1,
 		Rows: []map[string]any{{
 			"group":     g.Name,

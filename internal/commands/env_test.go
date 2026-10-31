@@ -372,3 +372,19 @@ func TestRestartedIsNullForAnApplication(t *testing.T) {
 		t.Errorf("restarted is %v for an application, want null", got)
 	}
 }
+
+// A person reads what applied the change from the table: a deployment for an
+// application, a restart for a Hangar, which has no deployment to show.
+func TestAppliedColumnFollowsTheTarget(t *testing.T) {
+	app := envTarget{App: core.App{ID: "app-id", Name: "myapp"}}
+	hangar := envTarget{App: core.App{ID: testHangarID, Name: "myhangar"}, hangar: &core.Hangar{ID: testHangarID, Name: "myhangar"}}
+	if got := envChangeTable(app, []string{"KEY"}, "set", true, 0, false).Columns[4]; got != "deploymentId" {
+		t.Errorf("application column %q, want deploymentId", got)
+	}
+	if got := envChangeTable(hangar, []string{"KEY"}, "set", true, 0, true).Columns[4]; got != "restarted" {
+		t.Errorf("Hangar column %q, want restarted", got)
+	}
+	if got := assignmentTable(core.EnvGroup{Name: "shared"}, hangar, true, false).Columns; got[len(got)-1] != "restarted" {
+		t.Errorf("Hangar assignment columns %v, want restarted last", got)
+	}
+}

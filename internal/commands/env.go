@@ -140,6 +140,15 @@ func (t envTarget) restarted(done bool) any {
 	return done
 }
 
+// appliedColumn is the column a person reads to see what applied the change:
+// the deployment an application started, or whether a Hangar was restarted.
+func (t envTarget) appliedColumn() string {
+	if t.hangar == nil {
+		return "deploymentId"
+	}
+	return "restarted"
+}
+
 // apply is applyChange for either target. It returns the deployment an
 // application started, or whether a Hangar was restarted.
 func (t envTarget) apply(ctx context.Context, req Request, client *api.Client, what string) (int, bool, error) {
@@ -435,7 +444,7 @@ func applyHangarChange(ctx context.Context, req Request, client *api.Client, han
 func envChangeTable(app envTarget, keys []string, action string, changed bool, deploymentID int, restarted bool) output.Table {
 	return output.Table{
 		Single:  true,
-		Columns: []string{"action", "keys", "app", "changed", "deploymentId"},
+		Columns: []string{"action", "keys", "app", "changed", app.appliedColumn()},
 		Total:   1,
 		Rows: []map[string]any{{
 			"action":       action,
