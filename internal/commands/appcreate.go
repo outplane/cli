@@ -52,7 +52,7 @@ func appCreate(ctx context.Context, req Request) (output.Table, error) {
 
 	created, err := core.CreateApp(ctx, client, cli.Config.TeamID.Value, spec)
 	if err != nil {
-		return output.Table{}, explainRepositoryAccess(err, spec)
+		return output.Table{}, explainRepositoryAccess(err, "app", spec.Repository)
 	}
 
 	cli.Out.Note("Created %s.", spec.Name)
@@ -74,17 +74,20 @@ func appCreate(ctx context.Context, req Request) (output.Table, error) {
 // It fails safe: a message this does not recognise is passed through exactly as
 // it arrived, so the worst outcome of the server rewording its error is that
 // two next steps stop appearing.
-func explainRepositoryAccess(err error, spec core.NewApp) error {
+//
+// A Hangar's repository is checked by the same server code, so hangar create
+// calls this too. prefix is the command family the code belongs to.
+func explainRepositoryAccess(err error, prefix, repo string) error {
 	e := clierr.AsError(err)
-	if e == nil || spec.Repository == "" || !strings.Contains(e.Message, "installations") {
+	if e == nil || repo == "" || !strings.Contains(e.Message, "installations") {
 		return err
 	}
 
 	return e.
-		WithCode("app.repository_unavailable").
+		WithCode(prefix+".repository_unavailable").
 		WithHint("The platform cannot see %s. Either it does not exist, or the Out Plane "+
 			"GitHub App has not been given access to it. A public repository needs no "+
-			"access at all: pass --public-repo.", spec.Repository).
+			"access at all: pass --public-repo.", repo).
 		WithStep("see which repositories are connected", "outplane", "repos").
 		WithStep("grant access to more of them", core.ConnectURL)
 }

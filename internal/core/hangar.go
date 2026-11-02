@@ -57,6 +57,13 @@ type Hangar struct {
 	// Ports are what its dev servers are reached on, lowest first. Never nil.
 	Ports []HangarPort `json:"ports"`
 
+	// Repository is the owner/name cloned into it on its first start, and
+	// Branch the branch cloned. Both empty for a Hangar created without one.
+	// PublicSource says it was read without a GitHub installation.
+	Repository   string `json:"repository"`
+	Branch       string `json:"branch"`
+	PublicSource bool   `json:"publicSource"`
+
 	CreatedAt string `json:"createdAt"`
 }
 
@@ -97,6 +104,10 @@ type hangarDTO struct {
 	MemoryLimitMB      int      `json:"memoryLimitMb"`
 	IdleTimeoutMinutes *int     `json:"idleTimeoutMinutes"`
 	CreatedDate        string   `json:"createdDate"`
+
+	SourceRepository string `json:"sourceRepository"`
+	Branch           string `json:"branch"`
+	IsPublicSource   bool   `json:"isPublicSource"`
 
 	Ports []hangarPortDTO `json:"ports"`
 }
@@ -146,6 +157,9 @@ func decodeHangar(d hangarDTO) Hangar {
 		MemoryLimitMB:      d.MemoryLimitMB,
 		IdleTimeoutMinutes: d.IdleTimeoutMinutes,
 		Ports:              decodeHangarPorts(d.Name, d.Ports),
+		Repository:         d.SourceRepository,
+		Branch:             d.Branch,
+		PublicSource:       d.IsPublicSource,
 		CreatedAt:          serverInstant(d.CreatedDate),
 	}
 }
@@ -319,6 +333,13 @@ type NewHangar struct {
 
 	// IdleTimeoutMinutes is nil for never.
 	IdleTimeoutMinutes *int
+
+	// Repository is owner/name on GitHub, cloned into the Hangar once, on its
+	// first start, and never changed afterwards. Empty for none; given, it
+	// needs a branch. PublicRepo reads it without a GitHub installation.
+	Repository string
+	Branch     string
+	PublicRepo bool
 }
 
 // CreateHangar creates a Hangar and starts it.
@@ -339,7 +360,8 @@ func CreateHangar(ctx context.Context, c *api.Client, h NewHangar) (Hangar, erro
 // Every collection is sent even when empty, and never as null: the server
 // requires all three and reads an empty one as "none", so a nil slice encoded
 // as null would be refused as missing. The idle timeout is the opposite case,
-// where null is the value that means never.
+// where null is the value that means never. The source fields are an
+// application's, sent only with a repository, whose absence means none.
 func (h NewHangar) body() map[string]any {
 	agents := h.Agents
 	if agents == nil {
@@ -354,13 +376,20 @@ func (h NewHangar) body() map[string]any {
 		groups = []string{}
 	}
 
-	return map[string]any{
+	body := map[string]any{
 		"name":                 h.Name,
 		"agents":               agents,
 		"environmentVariables": env,
 		"envVariableGroupIds":  groups,
 		"idleTimeoutMinutes":   h.IdleTimeoutMinutes,
 	}
+	if h.Repository != "" {
+		body["sourceProvider"] = sourceProviderValue(false)
+		body["sourceRepository"] = h.Repository
+		body["branch"] = h.Branch
+		body["isPublicSource"] = h.PublicRepo
+	}
+	return body
 }
 
 // A Hangar's ports.
@@ -466,6 +495,11 @@ func (h NewHangar) Check() error {
 	}
 	if err := checkHangarAgents(h.Agents); err != nil {
 		return err
+	}
+	if h.Repository != "" {
+		if err := checkRepository("hangar", h.Repository, h.Branch); err != nil {
+			return err
+		}
 	}
 	return CheckHangarIdleTimeout(h.IdleTimeoutMinutes)
 }

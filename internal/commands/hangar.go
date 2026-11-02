@@ -32,7 +32,7 @@ func hangarList(ctx context.Context, req Request) (output.Table, error) {
 	}
 
 	table := output.Table{
-		Columns: []string{"name", "status", "agents", "size", "createdAt"},
+		Columns: []string{"name", "status", "agents", "size", "repository", "createdAt"},
 		Total:   len(hangars),
 	}
 	for _, h := range hangars {
@@ -54,7 +54,7 @@ func hangarGet(ctx context.Context, req Request) (output.Table, error) {
 	return output.Table{
 		Single: true,
 		Columns: []string{"name", "displayName", "id", "status", "agents", "size", "diskGb",
-			"idleTimeoutMinutes", "createdAt"},
+			"idleTimeoutMinutes", "repository", "branch", "createdAt"},
 		Total: 1,
 		Rows:  []map[string]any{hangarRow(hangar)},
 	}, nil
@@ -78,6 +78,9 @@ func hangarRow(h core.Hangar) map[string]any {
 		"diskGb":             h.DiskGB,
 		"idleTimeoutMinutes": idle,
 		"ports":              hangarPortRows(h.Ports),
+		"repository":         nilIfEmpty(h.Repository),
+		"branch":             nilIfEmpty(h.Branch),
+		"publicSource":       h.PublicSource,
 		"createdAt":          nilIfEmpty(h.CreatedAt),
 	}
 }

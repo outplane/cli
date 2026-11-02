@@ -18,9 +18,10 @@ func init() {
 // hangarCreate makes a Hangar and starts it.
 //
 // It follows app create: everything the server would refuse is checked before
-// anything is sent, which is what makes --dry-run worth running. Two refusals
+// anything is sent, which is what makes --dry-run worth running. Three refusals
 // only the server can make are given a way forward here: the name being taken,
-// by an application as much as by a Hangar, and the team's limit on Hangars.
+// by an application as much as by a Hangar, the team's limit on Hangars, and a
+// repository the platform cannot see, explained as app create explains it.
 //
 // Variable groups are named the way every other command names them, by name or
 // by id, and resolved before anything is sent. A dry run resolves them too: it
@@ -80,6 +81,11 @@ func hangarCreate(ctx context.Context, req Request) (output.Table, error) {
 	} else {
 		cli.Out.Note("It is starting. Join its session once it is ready: %s",
 			strings.Join(connectArgv(req, created), " "))
+		if created.Repository != "" {
+			cli.Out.Note("On its first start it clones %s@%s into %s, once. To push, sign in to "+
+				"GitHub in its terminal with gh auth login.", created.Repository, created.Branch,
+				cloneDir(created.Repository))
+		}
 	}
 
 	return hangarCreateTable(hangarRow(created), spec, names, true), nil
@@ -116,12 +122,54 @@ func buildNewHangar(req Request) (core.NewHangar, error) {
 		return core.NewHangar{}, err
 	}
 
-	return core.NewHangar{
+	spec := core.NewHangar{
 		Name:               strings.TrimSpace(req.Args[0]),
 		Agents:             agents,
 		Env:                env,
 		IdleTimeoutMinutes: idle,
-	}, nil
+		Repository:         strings.TrimSpace(req.Flags.String("repo")),
+		Branch:             strings.TrimSpace(req.Flags.String("branch")),
+		PublicRepo:         req.Flags.Bool("public-repo"),
+	}
+	if err := checkRepositoryFlags(spec); err != nil {
+		return core.NewHangar{}, err
+	}
+	return spec, nil
+}
+
+// checkRepositoryFlags refuses --branch or --public-repo without --repo.
+//
+// The rules for a repository are app create's and are checked with the rest of
+// the request. What only this command has to say is that both flags describe
+// the repository --repo names: without one, a Hangar has no repository and
+// either flag would be dropped without a word.
+func checkRepositoryFlags(spec core.NewHangar) error {
+	if spec.Repository != "" {
+		return nil
+	}
+
+	var flag string
+	switch {
+	case spec.PublicRepo:
+		flag = "--public-repo"
+	case spec.Branch != "":
+		flag = "--branch"
+	default:
+		return nil
+	}
+	return clierr.New(clierr.KindUsage, "%s needs --repo", flag).
+		WithCode("hangar.repository_required").
+		WithHint("It describes the repository --repo names. Pass --repo owner/name with it, or "+
+			"leave it out for a Hangar with no repository.").
+		WithStep("create one with a repository", "outplane", "hangar", "create", "<NAME>",
+			"--repo", "<OWNER>/<REPO>", "--branch", "main")
+}
+
+// cloneDir is where a Hangar clones its repository: a directory of the
+// repository's name in its home.
+func cloneDir(repo string) string {
+	_, name, _ := strings.Cut(repo, "/")
+	return "~/" + name
 }
 
 // hangarAgents reads --agent and --terminal-only.
@@ -206,14 +254,16 @@ func hangarEnvGroups(ctx context.Context, req Request) ([]core.EnvGroup, error) 
 	return groups, nil
 }
 
-// explainHangarRefusal adds a way forward to the two refusals only the server
-// can make.
+// explainHangarRefusal adds a way forward to the refusals only the server can
+// make.
 //
-// The server's own message is kept in both cases. A taken name is a conflict
+// The server's own message is kept in every case. A taken name is a conflict
 // whatever took it, and the reader needs to know that an application counts,
 // because `hangar list` will not show it. The limit arrives as a plan limit,
 // whose generic advice points at billing; a team's number of Hangars is a fixed
-// maximum rather than a plan setting, so that advice is replaced.
+// maximum rather than a plan setting, so that advice is replaced. A repository
+// the platform cannot see is the server's app create message, explained the
+// same way.
 func explainHangarRefusal(err error, spec core.NewHangar) error {
 	e := clierr.AsError(err)
 	if e == nil {
@@ -234,7 +284,7 @@ func explainHangarRefusal(err error, spec core.NewHangar) error {
 				"Retrying will not help; deleting one makes room.").
 			WithStep("see the team's Hangars", "outplane", "hangar", "list")
 	}
-	return err
+	return explainRepositoryAccess(err, "hangar", spec.Repository)
 }
 
 // describeNewHangar prints what would be created, so a dry run says more than
@@ -247,6 +297,12 @@ func describeNewHangar(req Request, spec core.NewHangar, groups []string) {
 	req.CLI.Out.Note("Would create %s with %s.", spec.Name, agents)
 
 	req.CLI.Out.Note("  idle timeout: %s", core.IdleTimeoutLabel(spec.IdleTimeoutMinutes))
+	if spec.Repository != "" {
+		req.CLI.Out.Note("  repository: %s@%s, cloned into %s on its first start",
+			spec.Repository, spec.Branch, cloneDir(spec.Repository))
+	} else {
+		req.CLI.Out.Note("  repository: none")
+	}
 	if len(spec.Env) > 0 {
 		req.CLI.Out.Note("  %s, values not shown", plural(len(spec.Env), "environment variable"))
 	}
@@ -258,7 +314,8 @@ func describeNewHangar(req Request, spec core.NewHangar, groups []string) {
 
 // plannedHangarRow is the row a dry run reports. What only the server decides,
 // the id, the state, the size and the disk, is null rather than guessed. A new
-// Hangar has no ports open.
+// Hangar has no ports open. The repository is what was asked for, which is what
+// the server keeps.
 func plannedHangarRow(spec core.NewHangar) map[string]any {
 	var idle any
 	if spec.IdleTimeoutMinutes != nil {
@@ -275,6 +332,9 @@ func plannedHangarRow(spec core.NewHangar) map[string]any {
 		"diskGb":             nil,
 		"idleTimeoutMinutes": idle,
 		"ports":              []map[string]any{},
+		"repository":         nilIfEmpty(spec.Repository),
+		"branch":             nilIfEmpty(spec.Branch),
+		"publicSource":       spec.PublicRepo,
 		"createdAt":          nil,
 	}
 }
@@ -298,7 +358,7 @@ func hangarCreateTable(row map[string]any, spec core.NewHangar, groups []string,
 	row["changed"] = changed
 	return output.Table{
 		Single:  true,
-		Columns: []string{"name", "id", "status", "agents", "size", "diskGb", "idleTimeoutMinutes", "changed"},
+		Columns: []string{"name", "id", "status", "agents", "size", "diskGb", "idleTimeoutMinutes", "repository", "branch", "changed"},
 		Total:   1,
 		Rows:    []map[string]any{row},
 	}

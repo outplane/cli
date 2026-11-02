@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -294,17 +295,32 @@ func (a NewApp) checkSource() error {
 		return nil
 	}
 
-	if strings.Count(a.Repository, "/") != 1 {
-		return usage(fmt.Sprintf("%q is not owner/name", a.Repository), "app.repository_invalid",
-			"A repository is given as its owner and its name, such as acme/checkout.")
-	}
-	if strings.TrimSpace(a.Branch) == "" {
-		return usage("a repository needs a branch", "app.branch_required",
-			"Pass --branch, which is usually main or master.")
+	if err := checkRepository("app", a.Repository, a.Branch); err != nil {
+		return err
 	}
 	if !contains(BuildMethods, a.BuildMethod) {
 		return usage(fmt.Sprintf("no build method called %q", a.BuildMethod), "app.build_method_invalid",
 			"Use one of: %s.", strings.Join(BuildMethods, ", "))
+	}
+	return nil
+}
+
+// repositoryPattern is owner/name as GitHub writes it: an owner of letters,
+// numbers and dashes, and a name that may hold dots and underscores as well.
+var repositoryPattern = regexp.MustCompile(`^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`)
+
+// checkRepository is the rule an application and a Hangar both take a
+// repository by: owner/name, and a branch. A name ending in a dot is refused
+// too, because a Hangar clones into a directory named after it. prefix is the
+// command family the codes belong to, app or hangar.
+func checkRepository(prefix, repo, branch string) error {
+	if !repositoryPattern.MatchString(repo) || strings.HasSuffix(repo, ".") {
+		return usage(fmt.Sprintf("%q is not owner/name", repo), prefix+".repository_invalid",
+			"A repository is given as its owner and its name, such as acme/checkout.")
+	}
+	if strings.TrimSpace(branch) == "" {
+		return usage("a repository needs a branch", prefix+".branch_required",
+			"Pass --branch, which is usually main or master.")
 	}
 	return nil
 }

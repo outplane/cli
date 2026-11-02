@@ -83,6 +83,10 @@ func TestNewHangarCheck(t *testing.T) {
 		{"unknown agent", NewHangar{Name: "workbench", Agents: []string{"notepad"}}, "hangar.agent_invalid"},
 		{"agent twice", NewHangar{Name: "workbench", Agents: []string{"codex", "codex"}}, "hangar.agent_duplicate"},
 		{"timeout not offered", NewHangar{Name: "workbench", IdleTimeoutMinutes: &fortyFive}, "hangar.idle_timeout_invalid"},
+		{"a repository", NewHangar{Name: "workbench", Repository: "acme/web.site", Branch: "main"}, ""},
+		{"a repository with no branch", NewHangar{Name: "workbench", Repository: "acme/web"}, "hangar.branch_required"},
+		{"a repository ending in a dot", NewHangar{Name: "workbench", Repository: "acme/web.", Branch: "main"}, "hangar.repository_invalid"},
+		{"an owner with a dot", NewHangar{Name: "workbench", Repository: "ac.me/web", Branch: "main"}, "hangar.repository_invalid"},
 	}
 
 	for _, tc := range cases {

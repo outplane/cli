@@ -23,7 +23,7 @@ func repoList() Command {
 	return Command{
 		Path:    []string{"repos"},
 		Aliases: []string{"repo"},
-		Short:   "list the repositories you can deploy from",
+		Short:   "list the repositories you can deploy from or clone into a Hangar",
 		Long: "Lists every repository your account has connected to Out Plane.\n\n" +
 			"This is your own list, not your team's. A repository a colleague can " +
 			"deploy will not appear here unless you have access to it too, which is " +
@@ -105,7 +105,7 @@ func repoList() Command {
 				"cloned and so could never build. Archived ones are listed and marked.",
 		},
 
-		Related: []string{"app list", "deploy create", "status"},
+		Related: []string{"app list", "deploy create", "hangar create", "status"},
 		DocsURL: "https://docs.outplane.com/cli/repos",
 	}
 }

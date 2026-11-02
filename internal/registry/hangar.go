@@ -97,6 +97,18 @@ func hangarFields() []Field {
 				"url, internal}. url is null on a private port; internal is name:port, where the " +
 				"team's applications reach it",
 		},
+		{
+			Name: "repository",
+			Type: "string | null",
+			Description: "owner/name on GitHub, cloned into ~/<name> on its first start. null for " +
+				"none. Set at creation and never changed",
+		},
+		{Name: "branch", Type: "string | null", Description: "the branch cloned. null without a repository"},
+		{
+			Name:        "publicSource",
+			Type:        "bool",
+			Description: "the repository is read without a GitHub installation",
+		},
 		{Name: "createdAt", Type: "string | null", Description: "RFC 3339, UTC"},
 	}
 }
@@ -188,7 +200,7 @@ func hangarGet() Command {
 		Path:  []string{"hangar", "get"},
 		Short: "show one Hangar in detail",
 		Long: "Reports one Hangar: its state, the agents installed in it, its size and disk, " +
-			"and its idle timeout.\n\n" +
+			"its idle timeout, and the repository cloned into it.\n\n" +
 			"The Hangar can be given by name, by id, or by a display name only one Hangar has.",
 
 		Risk:         RiskRead,
@@ -258,7 +270,8 @@ func hangarGet() Command {
 }
 
 // hangarCreate follows app create, with fewer ways to be wrong: the size and the
-// disk are not the caller's to choose, and there is no source to build from.
+// disk are not the caller's to choose, and a repository, when there is one, is
+// cloned rather than built.
 func hangarCreate() Command {
 	return Command{
 		Path:  []string{"hangar", "create"},
@@ -271,7 +284,11 @@ func hangarCreate() Command {
 			"The name follows the rule for application names and comes from the same set: " +
 			"letters and numbers, 5 to 45 characters, and not one an application in the team " +
 			"already has. The size and the disk are set by the platform and reported in the " +
-			"result.",
+			"result.\n\n" +
+			"With --repo, a GitHub repository is cloned into ~/<name> once, on the Hangar's " +
+			"first start, and cannot be changed afterwards. Out Plane does not push: sign in " +
+			"to GitHub in the Hangar's terminal with `gh auth login`, or with a token for " +
+			"that repository.",
 
 		Risk:         RiskWrite,
 		RequiresAuth: true,
@@ -322,6 +339,22 @@ func hangarCreate() Command {
 				Description: "how long the Hangar may sit idle before it pauses, as a duration or " +
 					"never. Idle means no output in its terminal and no key from anyone connected",
 			},
+			{
+				Name:        "repo",
+				Type:        "string",
+				Description: "GitHub repository to clone on the first start, as owner/name. Requires --branch",
+			},
+			{
+				Name:        "branch",
+				Type:        "string",
+				Description: "branch to clone, usually main. Required with --repo",
+			},
+			{
+				Name: "public-repo",
+				Type: "bool", Default: "false",
+				Description: "the repository is public, so no installation is needed to read it. " +
+					"Only with --repo",
+			},
 		},
 
 		OutputFields: append(hangarFields(),
@@ -347,6 +380,10 @@ func hangarCreate() Command {
 			"hangar.agent_conflict",
 			"hangar.idle_timeout_invalid",
 			"hangar.env_group_duplicate",
+			"hangar.repository_invalid",
+			"hangar.branch_required",
+			"hangar.repository_required",
+			"hangar.repository_unavailable",
 			"hangar.limit_reached",
 			"envgroup.not_found",
 			"envgroup.ambiguous",
@@ -373,6 +410,14 @@ func hangarCreate() Command {
 				Command:      "outplane hangar create myhangar --agent codex --idle-timeout never",
 				Argv:         []string{"outplane", "hangar", "create", "myhangar", "--agent", "codex", "--idle-timeout", "never"},
 				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>"},
+				Risk:         RiskWrite,
+			},
+			{
+				Title:   "with a repository cloned in on its first start",
+				Command: "outplane hangar create myhangar --repo acme/web --branch main",
+				Argv: []string{"outplane", "hangar", "create", "myhangar",
+					"--repo", "acme/web", "--branch", "main"},
+				Placeholders: map[string]string{"myhangar": "<HANGAR_NAME>", "acme/web": "<OWNER>/<REPO>"},
 				Risk:         RiskWrite,
 			},
 			{
@@ -437,12 +482,23 @@ func hangarCreate() Command {
 				"change them afterwards, and a change applies the next time the Hangar starts.",
 			"--env-group takes a name or an id. Each one is resolved with a request of its own " +
 				"before anything is sent, under --dry-run as well.",
+			"--repo is cloned into ~/<name> once, on the first start, at --branch, which it " +
+				"requires. A clone that fails is not tried again: the Hangar's terminal says why " +
+				"and gives the command to clone it by hand. The repository cannot be changed " +
+				"afterwards. --branch or --public-repo without --repo is hangar.repository_required.",
+			"A private repository is read through the GitHub installation of the user whose " +
+				"token this is, as for `app create`; --public-repo skips that. " +
+				"hangar.repository_unavailable means the platform cannot see it, and the error " +
+				"points at `outplane repos` and the page that grants access.",
+			"Out Plane only clones. To push, and to fetch a private repository later, sign in to " +
+				"GitHub in the Hangar's terminal with `gh auth login`, or with a token for that " +
+				"repository.",
 			"Everything the server would refuse is checked first, so an error names the field. " +
-				"The exceptions are the name being taken and the team's limit, which only the " +
-				"server knows.",
+				"The exceptions are the name being taken, the team's limit, and whether the " +
+				"repository and its branch can be read, which only the server knows.",
 		},
 
-		Related: []string{"hangar list", "hangar get", "hangar connect", "hangar delete", "env group list"},
+		Related: []string{"hangar list", "hangar get", "hangar connect", "hangar delete", "env group list", "repos"},
 		DocsURL: "https://docs.outplane.com/cli/hangar",
 	}
 }
