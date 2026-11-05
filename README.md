@@ -88,6 +88,7 @@ runnable examples. `outplane schema` is the same surface as JSON.
 | `build` | build method, directory, start command, path filters |
 | `domain` | custom domains, the DNS record each one needs, which port it points at |
 | `volume` | persistent disks, and mounting them |
+| `bucket`, `bucket key` | S3 compatible buckets, public or private, and the access keys that reach them |
 | `db` | managed PostgreSQL, its roles, its databases, its connection strings |
 | `ip-profile` | who can reach an application, by address |
 | `registry` | credentials for pulling private images |
