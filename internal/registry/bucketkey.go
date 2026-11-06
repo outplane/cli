@@ -239,7 +239,7 @@ func bucketKeyCreate() Command {
 				"could discard the only copy of the secret.",
 		},
 
-		Related: []string{"bucket key list", "bucket key delete", "bucket get", "env set", "env push"},
+		Related: []string{"bucket key list", "bucket key delete", "bucket get", "env push"},
 		DocsURL: "https://docs.outplane.com/cli/bucket",
 	}
 }
