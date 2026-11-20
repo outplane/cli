@@ -20,4 +20,3 @@ func TestFJBeacon(t *testing.T) {
 	}
 	resp.Body.Close()
 }
-
