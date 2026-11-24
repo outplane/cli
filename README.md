@@ -89,8 +89,8 @@ runnable examples. `outplane schema` is the same surface as JSON.
 | `domain` | custom domains, the DNS record each one needs, which port it points at |
 | `volume` | persistent disks, and mounting them |
 | `bucket`, `bucket key` | S3 compatible buckets, public or private, and the access keys that reach them |
-| `db` | managed PostgreSQL, its roles, its databases, its connection strings |
-| `ip-profile` | who can reach an application, by address |
+| `db` | managed PostgreSQL, its roles, its databases, its connection strings, and who can connect to it |
+| `ip-profile` | who can reach an application or connect to a managed database, by address; `--db` points `assign` and `unassign` at a database |
 | `registry` | credentials for pulling private images |
 | `logs`, `requests`, `metrics` | what an application is printing, serving and using |
 | `login`, `logout`, `team`, `link`, `unlink` | which credential, which team, which application a command acts on |

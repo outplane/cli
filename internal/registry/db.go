@@ -50,6 +50,12 @@ func dbFields() []Field {
 			Type:        "string | null",
 			Description: "the provider's compute unit, such as 0.25-1. Not a platform instance code",
 		},
+		{
+			Name: "ipRestricted",
+			Type: "bool",
+			Description: "true when an assigned IP access profile has a rule, so only its networks " +
+				"and applications running on Out Plane can connect. false means any address can",
+		},
 		{Name: "createdAt", Type: "string | null", Description: "RFC 3339, UTC"},
 	}
 }
@@ -117,8 +123,9 @@ func dbGet() Command {
 	return Command{
 		Path:  []string{"db", "get"},
 		Short: "show one database and what is inside it",
-		Long: "Reports one database, with the roles and the databases inside it.\n\n" +
-			"Those two are what a connection string is made of, which is why they are read " +
+		Long: "Reports one database, with the roles and the databases inside it, and the IP " +
+			"access profiles that decide who can connect to it.\n\n" +
+			"The first two are what a connection string is made of, which is why they are read " +
 			"here rather than left to a second command.",
 
 		Risk:         RiskRead,
@@ -130,6 +137,7 @@ func dbGet() Command {
 			"GET /api/DataStorage/GetAllDataSourcesByTeamId",
 			"GET /api/DataStorage/GetDataStorageById/{id}/false",
 			"GET /api/DataStorage/GetDataStorageRolesAndDatabases/{id}",
+			"GET /api/IPAccessProfile/GetByDataStorageId/{dataStorageId}",
 		},
 
 		Args: []Arg{dbArg()},
@@ -140,6 +148,12 @@ func dbGet() Command {
 				Name:        "databases",
 				Type:        "array",
 				Description: "{name, owner}: the databases inside the instance",
+			},
+			Field{
+				Name: "ipProfiles",
+				Type: "array",
+				Description: "{id, profile, profileId}: the IP access profiles assigned to it. id is " +
+					"the assignment's own id",
 			}),
 
 		ErrorCodes: []string{"db.not_found", "db.ambiguous", "usage.missing_argument"},
@@ -173,6 +187,17 @@ func dbGet() Command {
 				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
 				Risk:         RiskRead,
 			},
+			{
+				Title:        "check who can connect to it",
+				Command:      "outplane db get orders --json --fields ipRestricted,ipProfiles",
+				Argv:         []string{"outplane", "db", "get", "orders", "--json", "--fields", "ipRestricted,ipProfiles"},
+				Placeholders: map[string]string{"orders": "<DATABASE_NAME>"},
+				Risk:         RiskRead,
+				OutputSample: map[string]any{
+					"ipRestricted": true,
+					"ipProfiles":   []any{map[string]any{"profile": "office"}},
+				},
+			},
 		},
 
 		AutomationNotes: []string{
@@ -182,9 +207,15 @@ func dbGet() Command {
 				"empty list with the status explaining it, not as a failure.",
 			"The provider's own project object is returned by the API and deliberately not " +
 				"reported: it is somebody else's shape and changes without notice.",
+			"ipRestricted is the platform's own answer and is true only when an assigned " +
+				"profile has at least one rule. A profile with no rules restricts nothing, so " +
+				"ipProfiles can be non-empty while ipRestricted is false. Applications running " +
+				"on Out Plane can always connect and appear in no profile.",
+			"When the profiles cannot be read, ipProfiles is empty and the reason is on " +
+				"stderr; ipRestricted is still accurate.",
 		},
 
-		Related: []string{"db url", "db list"},
+		Related: []string{"db url", "db list", "ip-profile assign", "ip-profile get"},
 		DocsURL: "https://docs.outplane.com/cli/db",
 	}
 }

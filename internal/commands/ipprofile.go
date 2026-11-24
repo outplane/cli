@@ -21,13 +21,14 @@ func init() {
 	register("ip-profile unassign", ipProfileUnassign)
 }
 
-// Who can reach an application, by address.
+// Who can reach an application or a managed database, by address.
 //
 // The same seven commands as env group, in the same order, taking the same
 // --app flag on the two that attach and detach. That is not imitation for its
 // own sake: the thing has the same shape, a team-level object attached to
 // applications and detached by the attachment's own id, so a reader who knows
-// one already knows this.
+// one already knows this. --db beside --app attaches the same profile to a
+// managed database instead.
 //
 // Every rule is an allow rule. The platform declares a Deny mode and leaves it
 // unimplemented, so a profile is an allowlist and attaching one means
@@ -49,22 +50,24 @@ func ipProfileList(ctx context.Context, req Request) (output.Table, error) {
 	}
 
 	table := output.Table{
-		Columns: []string{"name", "rules", "assignments", "description"},
+		Columns: []string{"name", "rules", "assignments", "databaseAssignments", "description"},
+		Headers: ipProfileHeaders(),
 		Total:   len(profiles),
 	}
 	for _, p := range profiles {
 		table.Rows = append(table.Rows, map[string]any{
-			"id":          p.ID,
-			"name":        p.Name,
-			"description": nilIfEmpty(p.Description),
-			"rules":       len(p.Rules),
-			"assignments": p.Assignments,
-			"createdAt":   nilIfEmpty(p.CreatedAt),
+			"id":                  p.ID,
+			"name":                p.Name,
+			"description":         nilIfEmpty(p.Description),
+			"rules":               p.RuleCount,
+			"assignments":         p.Assignments,
+			"databaseAssignments": p.DatabaseAssignments,
+			"createdAt":           nilIfEmpty(p.CreatedAt),
 		})
 	}
 
 	if len(profiles) == 0 {
-		table.Footer = "This team has none, so every application is reachable from anywhere."
+		table.Footer = "This team has none, so every application and database is reachable from anywhere."
 	}
 	return table, nil
 }
@@ -183,9 +186,11 @@ func ipProfileSet(ctx context.Context, req Request) (output.Table, error) {
 	// that is running. They are carried over from the read, which had them.
 	saved.AssignedApps = profile.AssignedApps
 	saved.Assignments = profile.Assignments
+	saved.AssignedDatabases = profile.AssignedDatabases
+	saved.DatabaseAssignments = profile.DatabaseAssignments
 
 	req.CLI.Out.Note("Changed %s on %s.", strings.Join(changed, " and "), saved.Name)
-	noteAffectedApps(req, saved)
+	noteAffected(req, saved)
 	return ipProfileTable(saved, true), nil
 }
 
@@ -218,71 +223,138 @@ func ipProfileDelete(ctx context.Context, req Request) (output.Table, error) {
 	return ipProfileTable(profile, true), nil
 }
 
-// ipProfileAssign attaches a profile to an application, which is the moment it
-// starts turning traffic away.
+// ipProfileAssign attaches a profile to an application or a managed database,
+// which is the moment it starts turning traffic away.
 func ipProfileAssign(ctx context.Context, req Request) (output.Table, error) {
-	profile, client, err := targetIPProfile(ctx, req, "assign")
+	profile, target, client, err := ipAssignTarget(ctx, req, "assign")
 	if err != nil {
 		return output.Table{}, err
 	}
 
-	app, err := flagApp(ctx, req, "ip-profile", "assign")
-	if err != nil {
-		return output.Table{}, err
-	}
-
-	if _, already := core.FindAssignment(profile, app.Name, app.ID); already {
-		req.CLI.Out.Note("%s already uses %s.", app.Name, profile.Name)
-		return ipAssignTable(profile, app, "assign", false), nil
+	if _, already := core.FindAssignment(profile, target); already {
+		req.CLI.Out.Note("%s already uses %s.", target.Name, profile.Name)
+		return ipAssignTable(profile, target, "assign", false), nil
 	}
 
 	if req.CLI.DryRun {
 		req.CLI.Out.Note("Would give %s the %s in %s. Nothing was sent.",
-			app.Name, plural(len(profile.Rules), "rule"), profile.Name)
+			target.Name, plural(len(profile.Rules), "rule"), profile.Name)
 		noteIPRules(req, profile)
-		return ipAssignTable(profile, app, "assign", false), nil
+		return ipAssignTable(profile, target, "assign", false), nil
 	}
 
-	if err := core.AssignIPProfile(ctx, client, profile.ID, app.ID); err != nil {
+	if err := core.AssignIPProfile(ctx, client, profile.ID, target); err != nil {
 		return output.Table{}, err
 	}
 
-	req.CLI.Out.Note("Assigned %s to %s.", profile.Name, app.Name)
-	req.CLI.Out.Note("Everything outside its %s can no longer reach %s.",
-		plural(len(profile.Rules), "rule"), app.Name)
-	return ipAssignTable(profile, app, "assign", true), nil
+	req.CLI.Out.Note("Assigned %s to %s.", profile.Name, target.Name)
+	noteAssigned(req, profile, target)
+	return ipAssignTable(profile, target, "assign", true), nil
 }
 
-// ipProfileUnassign detaches one, which opens the application again.
+// ipProfileUnassign detaches one, which opens the application or database again.
 func ipProfileUnassign(ctx context.Context, req Request) (output.Table, error) {
-	profile, client, err := targetIPProfile(ctx, req, "unassign")
+	profile, target, client, err := ipAssignTarget(ctx, req, "unassign")
 	if err != nil {
 		return output.Table{}, err
 	}
 
-	app, err := flagApp(ctx, req, "ip-profile", "unassign")
-	if err != nil {
-		return output.Table{}, err
-	}
-
-	assignment, ok := core.FindAssignment(profile, app.Name, app.ID)
+	assignmentID, ok := core.FindAssignment(profile, target)
 	if !ok {
-		req.CLI.Out.Note("%s does not use %s.", app.Name, profile.Name)
-		return ipAssignTable(profile, app, "unassign", false), nil
+		req.CLI.Out.Note("%s does not use %s.", target.Name, profile.Name)
+		return ipAssignTable(profile, target, "unassign", false), nil
 	}
 
 	if req.CLI.DryRun {
-		req.CLI.Out.Note("Would stop %s using %s. Nothing was sent.", app.Name, profile.Name)
-		return ipAssignTable(profile, app, "unassign", false), nil
+		req.CLI.Out.Note("Would stop %s using %s. Nothing was sent.", target.Name, profile.Name)
+		return ipAssignTable(profile, target, "unassign", false), nil
 	}
 
-	if err := core.UnassignIPProfile(ctx, client, assignment.ID); err != nil {
+	if err := core.UnassignIPProfile(ctx, client, assignmentID); err != nil {
 		return output.Table{}, err
 	}
 
-	req.CLI.Out.Note("Removed %s from %s.", profile.Name, app.Name)
-	req.CLI.Out.Note("It is reachable from anywhere again, unless another profile still covers it.")
-	return ipAssignTable(profile, app, "unassign", true), nil
+	req.CLI.Out.Note("Removed %s from %s.", profile.Name, target.Name)
+	if target.IsDatabase() {
+		req.CLI.Out.Note("It accepts connections from anywhere again, unless another profile still covers it.")
+	} else {
+		req.CLI.Out.Note("It is reachable from anywhere again, unless another profile still covers it.")
+	}
+	return ipAssignTable(profile, target, "unassign", true), nil
+}
+
+// ipAssignTarget resolves what assign and unassign act on: the profile, then
+// the managed database --db names or else the application --app names or the
+// directory links. --app and --db together, or an empty --db, are refused
+// before anything is sent.
+func ipAssignTarget(ctx context.Context, req Request, verb string) (core.IPProfile, core.IPTarget, *api.Client, error) {
+	if err := checkIPTarget(req); err != nil {
+		return core.IPProfile{}, core.IPTarget{}, nil, err
+	}
+
+	profile, client, err := targetIPProfile(ctx, req, verb)
+	if err != nil {
+		return core.IPProfile{}, core.IPTarget{}, nil, err
+	}
+
+	if dbGiven(req) {
+		db, err := resolveDatabase(ctx, req, strings.TrimSpace(req.Flags.String("db")))
+		if err != nil {
+			return core.IPProfile{}, core.IPTarget{}, nil, err
+		}
+		return profile, core.IPTarget{Name: db.Name, DatabaseID: db.ID, Restricted: db.IPRestricted}, client, nil
+	}
+
+	app, err := flagApp(ctx, req, "ip-profile", verb)
+	if err != nil {
+		return core.IPProfile{}, core.IPTarget{}, nil, err
+	}
+	return profile, core.IPTarget{Name: app.Name, AppID: app.ID}, client, nil
+}
+
+// noteAssigned says what an assignment turned away. A database differs from an
+// application twice: applications running on Out Plane can always connect to
+// it, and when another profile already restricted it this one only adds
+// networks.
+func noteAssigned(req Request, profile core.IPProfile, target core.IPTarget) {
+	rules := plural(len(profile.Rules), "rule")
+	switch {
+	case !target.IsDatabase():
+		req.CLI.Out.Note("Everything outside its %s can no longer reach %s.", rules, target.Name)
+	case len(profile.Rules) == 0:
+		req.CLI.Out.Note("It has no rules, so %s still accepts connections from anywhere unless another profile covers it.",
+			target.Name)
+	case target.Restricted:
+		req.CLI.Out.Note("The networks in its %s can now connect to %s as well.", rules, target.Name)
+	default:
+		req.CLI.Out.Note("Everything outside its %s can no longer connect to %s, except applications running on Out Plane.",
+			rules, target.Name)
+	}
+}
+
+// dbGiven reports whether --db was written, empty or not.
+func dbGiven(req Request) bool {
+	return req.Given("db") || strings.TrimSpace(req.Flags.String("db")) != ""
+}
+
+// checkIPTarget refuses --app and --db together, and an empty --db, before
+// anything is sent. Nothing defaults to a database, so an empty --db is refused
+// rather than read as the linked app.
+func checkIPTarget(req Request) error {
+	if !dbGiven(req) {
+		return nil
+	}
+	if strings.TrimSpace(req.Flags.String("app")) != "" {
+		return clierr.New(clierr.KindUsage, "--app and --db are both set").
+			WithCode("usage.conflicting_flags").
+			WithHint("A profile is assigned to one application or one database at a time. Name one of them.")
+	}
+	if strings.TrimSpace(req.Flags.String("db")) == "" {
+		return clierr.New(clierr.KindUsage, "--db is empty").
+			WithCode("usage.empty_argument").
+			WithHint("This is what an unset variable looks like.")
+	}
+	return nil
 }
 
 // targetIPProfile resolves the profile every command here acts on.
@@ -355,16 +427,19 @@ func checkIPProfileConfirmed(req Request, profile core.IPProfile) error {
 	return nil
 }
 
-// noteAffectedApps names what a change reaches, because changing a rule on an
-// assigned profile changes who can reach a running application.
-func noteAffectedApps(req Request, profile core.IPProfile) {
-	if len(profile.AssignedApps) == 0 {
-		req.CLI.Out.Note("It is assigned to nothing, so nothing changed for any application.")
+// noteAffected names what a change reaches, because changing a rule on an
+// assigned profile changes who can reach a running application or database.
+func noteAffected(req Request, profile core.IPProfile) {
+	if len(profile.AssignedApps) == 0 && len(profile.AssignedDatabases) == 0 {
+		req.CLI.Out.Note("It is assigned to nothing, so nothing changed for any application or database.")
 		return
 	}
-	names := make([]string, 0, len(profile.AssignedApps))
+	names := make([]string, 0, len(profile.AssignedApps)+len(profile.AssignedDatabases))
 	for _, a := range profile.AssignedApps {
 		names = append(names, a.AppName)
+	}
+	for _, d := range profile.AssignedDatabases {
+		names = append(names, "database "+d.DatabaseName)
 	}
 	req.CLI.Out.Note("This applies now to %s.", strings.Join(names, ", "))
 }
@@ -410,32 +485,47 @@ func ipProfileTable(p core.IPProfile, changed bool) output.Table {
 		apps = append(apps, map[string]any{"id": a.ID, "app": a.AppName, "appId": a.AppID})
 	}
 
+	databases := make([]map[string]any, 0, len(p.AssignedDatabases))
+	for _, d := range p.AssignedDatabases {
+		databases = append(databases, map[string]any{"id": d.ID, "db": d.DatabaseName, "dbId": d.DatabaseID})
+	}
+
 	return output.Table{
 		Single: true,
-		// rules and assignedApps are JSON-only: a list of objects renders as an
-		// unreadable map in a table, and the counts answer what a reader scans
-		// for. The footer names the rules in text mode instead.
-		Columns: []string{"name", "description", "rules", "assignments", "changed"},
+		// rules, assignedApps and assignedDatabases are JSON-only: a list of
+		// objects renders as an unreadable map in a table, and the counts answer
+		// what a reader scans for. The footer names the rules in text mode
+		// instead.
+		Columns: []string{"name", "description", "rules", "assignments", "databaseAssignments", "changed"},
+		Headers: ipProfileHeaders(),
 		Total:   1,
 		Footer:  ipRuleFooter(p),
 		Rows: []map[string]any{{
-			"id":           nilIfEmpty(p.ID),
-			"name":         p.Name,
-			"description":  nilIfEmpty(p.Description),
-			"rules":        len(p.Rules),
-			"assignments":  p.Assignments,
-			"ruleList":     rules,
-			"assignedApps": apps,
-			"createdAt":    nilIfEmpty(p.CreatedAt),
-			"changed":      changed,
+			"id":                  nilIfEmpty(p.ID),
+			"name":                p.Name,
+			"description":         nilIfEmpty(p.Description),
+			"rules":               len(p.Rules),
+			"assignments":         p.Assignments,
+			"databaseAssignments": p.DatabaseAssignments,
+			"ruleList":            rules,
+			"assignedApps":        apps,
+			"assignedDatabases":   databases,
+			"createdAt":           nilIfEmpty(p.CreatedAt),
+			"changed":             changed,
 		}},
 	}
+}
+
+// ipProfileHeaders names the two counts by what they count. assignments is
+// the older field and counts applications only, which its JSON name cannot say.
+func ipProfileHeaders() map[string]string {
+	return map[string]string{"assignments": "APPS", "databaseAssignments": "DATABASES"}
 }
 
 // ipRuleFooter says what the numbers do not.
 func ipRuleFooter(p core.IPProfile) string {
 	if len(p.Rules) == 0 {
-		return "It has no rules, so it restricts nothing. An application with only this profile is reachable from anywhere."
+		return "It has no rules, so it restricts nothing. An application or database with only this profile is reachable from anywhere."
 	}
 
 	parts := make([]string, 0, len(p.Rules))
@@ -445,19 +535,34 @@ func ipRuleFooter(p core.IPProfile) string {
 	return "Allows " + strings.Join(parts, ", ") + ". Everything else is turned away."
 }
 
-func ipAssignTable(p core.IPProfile, app core.App, action string, changed bool) output.Table {
+// ipAssignTable is what assign and unassign report. The fields of the target
+// not acted on are null rather than absent, so an application's result and a
+// database's have the same fields.
+func ipAssignTable(p core.IPProfile, t core.IPTarget, action string, changed bool) output.Table {
+	row := map[string]any{
+		"action":    action,
+		"profile":   p.Name,
+		"profileId": p.ID,
+		"app":       nil,
+		"appId":     nil,
+		"db":        nil,
+		"dbId":      nil,
+		"rules":     len(p.Rules),
+		"changed":   changed,
+	}
+
+	column := "app"
+	if t.IsDatabase() {
+		column = "db"
+		row["db"], row["dbId"] = t.Name, t.DatabaseID
+	} else {
+		row["app"], row["appId"] = t.Name, t.AppID
+	}
+
 	return output.Table{
 		Single:  true,
-		Columns: []string{"action", "profile", "app", "changed"},
+		Columns: []string{"action", "profile", column, "changed"},
 		Total:   1,
-		Rows: []map[string]any{{
-			"action":    action,
-			"profile":   p.Name,
-			"profileId": p.ID,
-			"app":       app.Name,
-			"appId":     app.ID,
-			"rules":     len(p.Rules),
-			"changed":   changed,
-		}},
+		Rows:    []map[string]any{row},
 	}
 }

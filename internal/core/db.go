@@ -37,6 +37,11 @@ type Database struct {
 	// so it is passed through rather than interpreted.
 	Size string `json:"size"`
 
+	// IPRestricted says whether an assigned IP access profile with at least one
+	// rule limits who can connect. The server works it out from its own records
+	// on every read, so it costs no request of its own.
+	IPRestricted bool `json:"ipRestricted"`
+
 	CreatedAt string `json:"createdAt"`
 }
 
@@ -47,6 +52,7 @@ type databaseDTO struct {
 	Version      string `json:"version"`
 	Region       string `json:"region"`
 	InstanceType string `json:"instanceType"`
+	IPRestricted bool   `json:"ipRestricted"`
 	CreatedDate  string `json:"createdDate"`
 }
 
@@ -100,13 +106,14 @@ func GetDatabase(ctx context.Context, c *api.Client, id string) (Database, error
 
 func decodeDatabase(d databaseDTO) Database {
 	return Database{
-		ID:        d.ID,
-		Name:      d.Name,
-		Status:    dbStatusNames.name(d.Status),
-		Version:   d.Version,
-		Region:    d.Region,
-		Size:      d.InstanceType,
-		CreatedAt: serverInstant(d.CreatedDate),
+		ID:           d.ID,
+		Name:         d.Name,
+		Status:       dbStatusNames.name(d.Status),
+		Version:      d.Version,
+		Region:       d.Region,
+		Size:         d.InstanceType,
+		IPRestricted: d.IPRestricted,
+		CreatedAt:    serverInstant(d.CreatedDate),
 	}
 }
 

@@ -10,17 +10,21 @@ import (
 	"github.com/outplane/cli/internal/api"
 )
 
-// Who is allowed to reach an application, by address.
+// Who is allowed to reach an application or a managed database, by address.
 //
-// A profile is a list of networks and a set of applications it is attached to.
-// Every rule is an allow rule: the platform declares a Deny mode and reserves
-// it, unimplemented, so a profile is an allowlist and attaching one to an
-// application means everything not listed stops reaching it.
+// A profile is a list of networks and a set of applications and databases it is
+// attached to. Every rule is an allow rule: the platform declares a Deny mode
+// and reserves it, unimplemented, so a profile is an allowlist and attaching one
+// means everything not listed stops reaching what it is attached to.
 //
 // The shape mirrors environment variable groups exactly, because the thing is
 // the same shape: a team-level object, assigned to applications, removed by the
 // assignment's own id rather than by the pair. The commands mirror them too, so
 // somebody who has used one has used both.
+//
+// A database assignment is a separate record on the server, but it is made and
+// removed through the same two endpoints as an application's: the request names
+// one target or the other, and an assignment's own id removes either kind.
 //
 // Two platform rules matter and both are the server's:
 //
@@ -38,11 +42,21 @@ type IPProfile struct {
 	Rules       []IPRule `json:"rules"`
 	Assignments int      `json:"assignments"`
 
+	// RuleCount is how many rules it has, which the list endpoints report
+	// without the rules themselves.
+	RuleCount int `json:"ruleCount"`
+
 	// AssignedApps are the applications using it, which only the detail
 	// endpoint carries. They matter more than the count: attaching a profile
 	// changes who can reach an application, so knowing which ones are affected
 	// is the difference between a safe change and an outage.
 	AssignedApps []IPAssignment `json:"assignedApps"`
+
+	// DatabaseAssignments and AssignedDatabases are the same two things for
+	// managed databases. Assignments keeps counting applications only, which is
+	// what it has always meant.
+	DatabaseAssignments int                    `json:"databaseAssignments"`
+	AssignedDatabases   []IPDatabaseAssignment `json:"assignedDatabases"`
 
 	CreatedAt string `json:"createdAt"`
 }
@@ -61,6 +75,14 @@ type IPAssignment struct {
 	AppName string `json:"app"`
 }
 
+// IPDatabaseAssignment is one managed database a profile is attached to.
+type IPDatabaseAssignment struct {
+	// ID is the assignment's own identifier, which removing one needs.
+	ID           string `json:"id"`
+	DatabaseID   string `json:"dbId"`
+	DatabaseName string `json:"db"`
+}
+
 type ipProfileDTO struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
@@ -68,6 +90,8 @@ type ipProfileDTO struct {
 	RuleCount       int    `json:"ruleCount"`
 	AssignmentCount int    `json:"assignmentCount"`
 	CreatedDate     string `json:"createdDate"`
+
+	DataStorageAssignmentCount int `json:"dataStorageAssignmentCount"`
 
 	Rules []struct {
 		CIDR        string `json:"cidr"`
@@ -80,6 +104,12 @@ type ipProfileDTO struct {
 		AppID        string `json:"appId"`
 		AppName      string `json:"appName"`
 	} `json:"assignedResources"`
+
+	AssignedDataStorages []struct {
+		AssignmentID    string `json:"assignmentId"`
+		DataStorageID   string `json:"dataStorageId"`
+		DataStorageName string `json:"dataStorageName"`
+	} `json:"assignedDataStorages"`
 }
 
 // ipAccessModeAllow is the only mode the platform implements. Deny is declared
@@ -127,6 +157,11 @@ func decodeIPProfile(d ipProfileDTO) IPProfile {
 	}
 	sort.Slice(rules, func(i, j int) bool { return rules[i].CIDR < rules[j].CIDR })
 
+	ruleCount := len(rules)
+	if ruleCount == 0 {
+		ruleCount = d.RuleCount
+	}
+
 	assigned := make([]IPAssignment, 0, len(d.AssignedResources))
 	for _, a := range d.AssignedResources {
 		assigned = append(assigned, IPAssignment{ID: a.AssignmentID, AppID: a.AppID, AppName: a.AppName})
@@ -138,14 +173,30 @@ func decodeIPProfile(d ipProfileDTO) IPProfile {
 		count = len(assigned)
 	}
 
+	databases := make([]IPDatabaseAssignment, 0, len(d.AssignedDataStorages))
+	for _, a := range d.AssignedDataStorages {
+		databases = append(databases, IPDatabaseAssignment{
+			ID: a.AssignmentID, DatabaseID: a.DataStorageID, DatabaseName: a.DataStorageName,
+		})
+	}
+	sort.Slice(databases, func(i, j int) bool { return databases[i].DatabaseName < databases[j].DatabaseName })
+
+	dbCount := d.DataStorageAssignmentCount
+	if dbCount == 0 {
+		dbCount = len(databases)
+	}
+
 	return IPProfile{
-		ID:           d.ID,
-		Name:         d.Name,
-		Description:  d.Description,
-		Rules:        rules,
-		Assignments:  count,
-		AssignedApps: assigned,
-		CreatedAt:    serverInstant(d.CreatedDate),
+		ID:                  d.ID,
+		Name:                d.Name,
+		Description:         d.Description,
+		Rules:               rules,
+		RuleCount:           ruleCount,
+		Assignments:         count,
+		AssignedApps:        assigned,
+		DatabaseAssignments: dbCount,
+		AssignedDatabases:   databases,
+		CreatedAt:           serverInstant(d.CreatedDate),
 	}
 }
 
@@ -192,17 +243,71 @@ func DeleteIPProfile(ctx context.Context, c *api.Client, id string) error {
 	return c.Delete(ctx, "/IPAccessProfile/Delete/"+id, nil)
 }
 
-// AssignIPProfile attaches a profile to an application.
-func AssignIPProfile(ctx context.Context, c *api.Client, profileID, appID string) error {
-	body := map[string]any{"ipAccessProfileId": profileID, "appId": appID}
+// IPTarget is what a profile is attached to: one application or one managed
+// database. Exactly one of AppID and DatabaseID is set.
+type IPTarget struct {
+	Name       string
+	AppID      string
+	DatabaseID string
+
+	// Restricted is whether a database was already limited by another profile
+	// before this change. Applications do not report it.
+	Restricted bool
+}
+
+// IsDatabase reports whether the target is a managed database.
+func (t IPTarget) IsDatabase() bool { return t.DatabaseID != "" }
+
+// AssignIPProfile attaches a profile to an application or a managed database.
+//
+// For a database the server applies the new allow list before it records the
+// assignment, so a refusal there arrives as this request's error and nothing
+// is assigned.
+func AssignIPProfile(ctx context.Context, c *api.Client, profileID string, target IPTarget) error {
+	body := map[string]any{"ipAccessProfileId": profileID}
+	if target.IsDatabase() {
+		body["dataStorageId"] = target.DatabaseID
+	} else {
+		body["appId"] = target.AppID
+	}
 	return c.Post(ctx, "/IPAccessProfile/Assign", body, nil)
 }
 
 // UnassignIPProfile removes an attachment by its own id, which is why the
-// caller has to look it up first: the pair of profile and application does not
-// identify one.
+// caller has to look it up first: the pair of profile and target does not
+// identify one. The same id space covers applications and databases.
 func UnassignIPProfile(ctx context.Context, c *api.Client, assignmentID string) error {
 	return c.Delete(ctx, "/IPAccessProfile/Unassign/"+assignmentID, nil)
+}
+
+// DatabaseIPProfile is one profile attached to a database, with the id of the
+// attachment that removing it needs.
+type DatabaseIPProfile struct {
+	AssignmentID string
+	Profile      IPProfile
+}
+
+// DatabaseIPProfiles lists the profiles attached to a managed database, sorted
+// by name.
+//
+// Each profile here carries its counts and not its rules: whether the database
+// is restricted is the database's own ipRestricted field, which the server
+// works out from every rule at once.
+func DatabaseIPProfiles(ctx context.Context, c *api.Client, databaseID string) ([]DatabaseIPProfile, error) {
+	var dtos []struct {
+		AssignmentID string       `json:"assignmentId"`
+		Profile      ipProfileDTO `json:"profile"`
+	}
+	if err := c.Get(ctx, "/IPAccessProfile/GetByDataStorageId/"+databaseID, &dtos); err != nil {
+		return nil, err
+	}
+
+	out := make([]DatabaseIPProfile, 0, len(dtos))
+	for _, d := range dtos {
+		out = append(out, DatabaseIPProfile{AssignmentID: d.AssignmentID, Profile: decodeIPProfile(d.Profile)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Profile.Name < out[j].Profile.Name })
+	return out, nil
 }
 
 // AppIPProfiles lists the profiles attached to an application.
@@ -319,15 +424,24 @@ func CheckCIDR(cidr string) error {
 	return nil
 }
 
-// FindAssignment locates the attachment to one application, which unassigning
-// needs and which the pair alone does not identify.
-func FindAssignment(p IPProfile, appName, appID string) (IPAssignment, bool) {
+// FindAssignment returns the id of the attachment between a profile and a
+// target, which unassigning needs and which the pair alone does not identify.
+func FindAssignment(p IPProfile, t IPTarget) (string, bool) {
+	if t.IsDatabase() {
+		for _, a := range p.AssignedDatabases {
+			if a.DatabaseID == t.DatabaseID {
+				return a.ID, true
+			}
+		}
+		return "", false
+	}
+
 	for _, a := range p.AssignedApps {
-		if a.AppID == appID || strings.EqualFold(a.AppName, appName) {
-			return a, true
+		if a.AppID == t.AppID || strings.EqualFold(a.AppName, t.Name) {
+			return a.ID, true
 		}
 	}
-	return IPAssignment{}, false
+	return "", false
 }
 
 func nilIfBlank(s string) any {

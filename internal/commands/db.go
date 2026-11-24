@@ -65,18 +65,79 @@ func dbGet(ctx context.Context, req Request) (output.Table, error) {
 		req.CLI.Out.Note("Could not read its roles and databases: %v", err)
 	}
 
+	// The profiles are a third request, and a failure to read them is reported
+	// the same way as the contents: ipRestricted already says whether the
+	// database is restricted, and that is the part a reader cannot do without.
+	profiles, err := core.DatabaseIPProfiles(ctx, client, db.ID)
+	if err != nil {
+		req.CLI.Out.Note("Could not read its IP access profiles: %v", err)
+	}
+
 	row := databaseRow(db)
 	row["roles"] = roleNames(roles)
 	row["databases"] = schemaRows(schemas)
+	row["ipProfiles"] = dbIPProfileRows(profiles)
+
+	footer := contentsFooter(db, roles, schemas)
+	if access := ipAccessFooter(db, profiles); footer == "" {
+		footer = access
+	} else {
+		footer += "\n\n" + access
+	}
 
 	table := output.Table{
 		Single:  true,
-		Columns: []string{"name", "status", "version", "region", "size", "createdAt"},
+		Columns: []string{"name", "status", "version", "region", "size", "ipRestricted", "createdAt"},
 		Total:   1,
 		Rows:    []map[string]any{row},
-		Footer:  contentsFooter(db, roles, schemas),
+		Footer:  footer,
 	}
 	return table, nil
+}
+
+// ipAccessFooter says who can connect, by name rather than by count.
+//
+// Applications on the platform are mentioned whenever the database is
+// restricted, because they can always connect and no profile lists them: a
+// reader comparing the rules with what actually connects would otherwise find
+// a connection nothing seems to allow.
+func ipAccessFooter(db core.Database, profiles []core.DatabaseIPProfile) string {
+	names := make([]string, 0, len(profiles))
+	restricting := make([]string, 0, len(profiles))
+	for _, p := range profiles {
+		names = append(names, p.Profile.Name)
+		if p.Profile.RuleCount > 0 {
+			restricting = append(restricting, p.Profile.Name)
+		}
+	}
+
+	switch {
+	case db.IPRestricted && len(restricting) > 0:
+		return "IP access: restricted to the networks in " + strings.Join(restricting, ", ") +
+			", plus applications running on Out Plane."
+	case db.IPRestricted:
+		return "IP access: restricted. Applications running on Out Plane can always connect."
+	case len(names) == 1:
+		return "IP access: any address can connect. " + names[0] +
+			" has no rules, so it restricts nothing."
+	case len(names) > 1:
+		return "IP access: any address can connect. " + strings.Join(names, ", ") +
+			" have no rules, so they restrict nothing."
+	default:
+		return "IP access: any address can connect. Restrict it with: outplane ip-profile assign <PROFILE_NAME> --db " + db.Name
+	}
+}
+
+func dbIPProfileRows(profiles []core.DatabaseIPProfile) []map[string]any {
+	rows := make([]map[string]any, 0, len(profiles))
+	for _, p := range profiles {
+		rows = append(rows, map[string]any{
+			"id":        p.AssignmentID,
+			"profile":   p.Profile.Name,
+			"profileId": p.Profile.ID,
+		})
+	}
+	return rows
 }
 
 // contentsFooter lists what is inside, since a single-object view has no room
@@ -357,12 +418,19 @@ func targetDatabase(ctx context.Context, req Request, verb string) (core.Databas
 			WithHint("This is what an unset variable looks like.")
 	}
 
+	return resolveDatabase(ctx, req, req.Args[0])
+}
+
+// resolveDatabase turns a name or an id into one database, with the errors
+// every db command gives. `ip-profile assign --db` resolves through it too, so
+// a database is named the same way wherever it is named.
+func resolveDatabase(ctx context.Context, req Request, ref string) (core.Database, error) {
 	client, err := req.CLI.APIClient()
 	if err != nil {
 		return core.Database{}, err
 	}
 
-	db, err := core.FindDatabase(ctx, client, req.Args[0])
+	db, err := core.FindDatabase(ctx, client, ref)
 	if err == nil {
 		return db, nil
 	}
@@ -393,13 +461,14 @@ func targetDatabase(ctx context.Context, req Request, verb string) (core.Databas
 
 func databaseRow(d core.Database) map[string]any {
 	return map[string]any{
-		"id":        d.ID,
-		"name":      d.Name,
-		"status":    d.Status,
-		"version":   d.Version,
-		"region":    d.Region,
-		"size":      nilIfEmpty(d.Size),
-		"createdAt": nilIfEmpty(d.CreatedAt),
+		"id":           d.ID,
+		"name":         d.Name,
+		"status":       d.Status,
+		"version":      d.Version,
+		"region":       d.Region,
+		"size":         nilIfEmpty(d.Size),
+		"ipRestricted": d.IPRestricted,
+		"createdAt":    nilIfEmpty(d.CreatedAt),
 	}
 }
 

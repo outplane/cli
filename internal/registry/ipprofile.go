@@ -1,11 +1,12 @@
 package registry
 
-// Who can reach an application, by address.
+// Who can reach an application or a managed database, by address.
 //
 // The same seven commands as the env group, in the same order, with the same
 // --app flag on the two that attach and detach. The thing has the same shape, a
 // team-level object attached to applications and detached by the attachment's
-// own id, so a reader who knows one knows this.
+// own id, so a reader who knows one knows this. The same two take --db for a
+// managed database instead, never together with --app.
 //
 // Two platform facts every declaration here has to carry:
 //
@@ -36,7 +37,8 @@ func ipProfileFields() []Field {
 		{Name: "name", Type: "string"},
 		{Name: "description", Type: "string | null"},
 		{Name: "rules", Type: "int", Description: "how many networks it allows"},
-		{Name: "assignments", Type: "int", Description: "how many applications use it"},
+		{Name: "assignments", Type: "int", Description: "how many applications use it. Databases are not counted here"},
+		{Name: "databaseAssignments", Type: "int", Description: "how many managed databases use it"},
 		{
 			Name: "ruleList", Type: "array",
 			Description: "the networks themselves, {cidr, description}. Sorted, and JSON only",
@@ -45,6 +47,11 @@ func ipProfileFields() []Field {
 			Name: "assignedApps", Type: "array",
 			Description: "the applications using it, {id, app, appId}. id is the assignment's " +
 				"own id, which is what detaching needs",
+		},
+		{
+			Name: "assignedDatabases", Type: "array",
+			Description: "the managed databases using it, {id, db, dbId}. id is the assignment's " +
+				"own id. Read by `ip-profile get`, not reported by `ip-profile list`",
 		},
 		{Name: "createdAt", Type: "string | null", Description: "RFC 3339, UTC"},
 		{Name: "changed", Type: "bool", Description: "false for a dry run"},
@@ -56,9 +63,39 @@ func ipProfileAppFlag() Flag {
 		Name: "app",
 		Type: "string",
 		Description: "application name or id. Defaults to the linked app. " +
-			"A flag rather than an argument, because the profile is the argument",
+			"A flag rather than an argument, because the profile is the argument. Not with --db",
 	}
 }
+
+func ipProfileDBFlag() Flag {
+	return Flag{
+		Name: "db",
+		Type: "string",
+		Description: "a managed database's name or id, instead of an application. Not with --app, " +
+			"and never a default",
+	}
+}
+
+// ipAssignFields is what assign and unassign report, for an application or a
+// database alike: the other target's two fields are null.
+func ipAssignFields(changed string) []Field {
+	return []Field{
+		{Name: "action", Type: "string", Enum: []string{"assign", "unassign"}},
+		{Name: "profile", Type: "string"},
+		{Name: "profileId", Type: "string"},
+		{Name: "app", Type: "string | null", Description: "null with --db"},
+		{Name: "appId", Type: "string | null", Description: "null with --db"},
+		{Name: "db", Type: "string | null", Description: "the database named by --db. null without it"},
+		{Name: "dbId", Type: "string | null", Description: "null without --db"},
+		{Name: "rules", Type: "int", Description: "how many networks the profile allows"},
+		{Name: "changed", Type: "bool", Description: changed},
+	}
+}
+
+// ipDBTargetNote is shared by assign and unassign.
+const ipDBTargetNote = "--db names a managed database instead of an application, and is refused " +
+	"together with --app. Nothing defaults to a database, so without --db the target is the " +
+	"application, linked or named."
 
 func ipRuleFlag(what string) Flag {
 	return Flag{
@@ -72,10 +109,11 @@ func ipProfileList() Command {
 		Path:  []string{"ip-profile", "list"},
 		Short: "list the team's IP access profiles",
 		Long: "Lists the profiles this team has, with how many networks each allows and how " +
-			"many applications use it.\n\n" +
+			"many applications and managed databases use it.\n\n" +
 			"A profile is an allowlist. An application it is attached to can be reached " +
 			"from the networks listed and from nowhere else; an application with no " +
-			"profile attached is reachable from anywhere.",
+			"profile attached is reachable from anywhere. A managed database works the same " +
+			"way, except that applications running on Out Plane can always connect to it.",
 
 		Risk:         RiskRead,
 		RequiresAuth: true,
@@ -98,11 +136,14 @@ func ipProfileList() Command {
 			},
 			{
 				Title:   "find the ones nothing uses",
-				Command: "outplane ip-profile list --json --fields name,assignments",
-				Argv:    []string{"outplane", "ip-profile", "list", "--json", "--fields", "name,assignments"},
-				Risk:    RiskRead,
+				Command: "outplane ip-profile list --json --fields name,assignments,databaseAssignments",
+				Argv: []string{"outplane", "ip-profile", "list", "--json",
+					"--fields", "name,assignments,databaseAssignments"},
+				Risk: RiskRead,
 				OutputSample: map[string]any{
-					"items":     []any{map[string]any{"name": "office", "assignments": 2}},
+					"items": []any{map[string]any{
+						"name": "office", "assignments": 2, "databaseAssignments": 1,
+					}},
 					"total":     1,
 					"truncated": false,
 				},
@@ -117,13 +158,15 @@ func ipProfileList() Command {
 
 		AutomationNotes: []string{
 			"The list carries counts rather than the rules themselves. `ip-profile get` " +
-				"returns the networks and the applications using them.",
-			"An empty list means no application in this team restricts who can reach it.",
+				"returns the networks and the applications and databases using them.",
+			"assignments counts applications only. databaseAssignments counts managed " +
+				"databases, and a profile neither of them uses has both at 0.",
+			"An empty list means no application or database in this team restricts who can reach it.",
 			"Every rule allows. The platform declares a deny mode and does not implement " +
 				"it, so a profile can only ever narrow what reaches an application.",
 		},
 
-		Related: []string{"ip-profile get", "ip-profile assign", "ip-profile create", "app get"},
+		Related: []string{"ip-profile get", "ip-profile assign", "ip-profile create", "app get", "db get"},
 		DocsURL: "https://docs.outplane.com/cli/ip-profile",
 	}
 }
@@ -132,11 +175,11 @@ func ipProfileGet() Command {
 	return Command{
 		Path:  []string{"ip-profile", "get"},
 		Short: "show one profile, its rules and what uses it",
-		Long: "Shows a profile in full: every network it allows and every application it is " +
-			"attached to.\n\n" +
-			"The applications matter as much as the rules. Changing a rule on a profile " +
-			"that is attached to something changes who can reach a running application, so " +
-			"this is what to read before changing one.",
+		Long: "Shows a profile in full: every network it allows and every application and " +
+			"managed database it is attached to.\n\n" +
+			"What it is attached to matters as much as the rules. Changing a rule on a " +
+			"profile that is attached to something changes who can reach a running " +
+			"application or connect to a database, so this is what to read before changing one.",
 
 		Risk:         RiskRead,
 		RequiresAuth: true,
@@ -173,21 +216,27 @@ func ipProfileGet() Command {
 				},
 			},
 			{
-				Title:        "see which applications a change would affect",
-				Command:      "outplane ip-profile get office --json --fields assignedApps",
-				Argv:         []string{"outplane", "ip-profile", "get", "office", "--json", "--fields", "assignedApps"},
+				Title:   "see which applications and databases a change would affect",
+				Command: "outplane ip-profile get office --json --fields assignedApps,assignedDatabases",
+				Argv: []string{"outplane", "ip-profile", "get", "office", "--json",
+					"--fields", "assignedApps,assignedDatabases"},
 				Placeholders: map[string]string{"office": "<PROFILE_NAME>"},
 				Risk:         RiskRead,
+				OutputSample: map[string]any{
+					"assignedApps":      []any{map[string]any{"app": "checkout"}},
+					"assignedDatabases": []any{map[string]any{"db": "orders"}},
+				},
 			},
 		},
 
 		AutomationNotes: []string{
-			"The id inside assignedApps is the assignment's own id, not the application's. " +
+			"The id inside assignedApps is the assignment's own id, not the application's, " +
+				"and the id inside assignedDatabases is the assignment's, not the database's. " +
 				"It is what the platform removes an attachment by, and `ip-profile " +
 				"unassign` looks it up rather than asking for it.",
-			"An empty ruleList restricts nothing. An application whose only attached " +
-				"profile is empty stays reachable from anywhere, exactly as with no profile, " +
-				"which is almost never the intended configuration.",
+			"An empty ruleList restricts nothing. An application or database whose only " +
+				"attached profile is empty stays reachable from anywhere, exactly as with no " +
+				"profile, which is almost never the intended configuration.",
 			"Two requests, not one: the API addresses profiles by id, so a name has to be " +
 				"resolved against the list first.",
 		},
@@ -201,9 +250,10 @@ func ipProfileCreate() Command {
 	return Command{
 		Path:  []string{"ip-profile", "create"},
 		Short: "create an IP access profile",
-		Long: "Creates a profile: a list of networks that may reach an application.\n\n" +
-			"Creating one changes nothing on its own. It reaches an application when it is " +
-			"assigned, and that is the moment traffic starts being turned away.\n\n" +
+		Long: "Creates a profile: a list of networks that may reach an application or connect " +
+			"to a managed database.\n\n" +
+			"Creating one changes nothing on its own. It reaches an application or a database " +
+			"when it is assigned, and that is the moment traffic starts being turned away.\n\n" +
 			"Networks are written in CIDR notation. One address is a /32 for IPv4 and a " +
 			"/128 for IPv6; a bare address is refused rather than guessed at.",
 
@@ -297,8 +347,8 @@ func ipProfileSet() Command {
 			"Anything not named is read and sent back unchanged, so changing a description " +
 			"does not clear the rules.\n\n" +
 			"A change to an assigned profile applies immediately, to a running " +
-			"application. This is the one command in the group that can take an " +
-			"application off the network without a deployment.",
+			"application and to every database it is assigned to. This is the one command " +
+			"in the group that can take an application off the network without a deployment.",
 
 		Risk:         RiskWrite,
 		RequiresAuth: true,
@@ -367,9 +417,14 @@ func ipProfileSet() Command {
 			"A flag that is not given keeps its value: the endpoint replaces everything it " +
 				"is given, so this command reads the profile first and sends it back with " +
 				"the change applied.",
-			"The change applies immediately to every application the profile is attached " +
-				"to, with no deployment. The result names them, and `ip-profile get` names " +
-				"them beforehand.",
+			"The change applies immediately to every application and database the profile " +
+				"is attached to, with no deployment. The result names them, and `ip-profile " +
+				"get` names them beforehand.",
+			"Each database the profile is attached to has its allow list changed before the " +
+				"new rules are saved. When one of them cannot be changed the command fails and " +
+				"the profile keeps its old rules; databases changed before it keep the new list " +
+				"until the profile is saved again. Changing several databases can outlast the request timeout, and a timeout can " +
+				"still finish on the server: read `ip-profile get` before sending it again.",
 			"Sending no flags at all is refused with usage.no_change rather than being a " +
 				"request that rewrites the profile with itself.",
 		},
@@ -384,8 +439,8 @@ func ipProfileDelete() Command {
 		Path:  []string{"ip-profile", "delete"},
 		Short: "permanently delete an IP access profile",
 		Long: "Deletes a profile and its rules.\n\n" +
-			"The platform refuses while any application still uses it, and says so. " +
-			"Detach it everywhere first with `ip-profile unassign`.\n\n" +
+			"The platform refuses while any application or database still uses it, and says " +
+			"so. Detach it everywhere first with `ip-profile unassign`.\n\n" +
 			"Nothing restores the rules afterwards.",
 
 		Risk:         RiskDestructive,
@@ -431,7 +486,10 @@ func ipProfileDelete() Command {
 				Argv:         []string{"outplane", "ip-profile", "delete", "office", "--dry-run", "--json"},
 				Placeholders: map[string]string{"office": "<PROFILE_NAME>"},
 				Risk:         RiskRead,
-				OutputSample: map[string]any{"name": "office", "rules": 2, "assignments": 0, "changed": false},
+				OutputSample: map[string]any{
+					"name": "office", "rules": 2, "assignments": 0, "databaseAssignments": 0,
+					"changed": false,
+				},
 			},
 			{
 				Title:        "request deletion. Returns exit 4 with a command to replay",
@@ -467,10 +525,12 @@ func ipProfileDelete() Command {
 func ipProfileAssign() Command {
 	return Command{
 		Path:  []string{"ip-profile", "assign"},
-		Short: "restrict an application to a profile's networks",
-		Long: "Attaches a profile to an application.\n\n" +
+		Short: "restrict an application or a database to a profile's networks",
+		Long: "Attaches a profile to an application, or with --db to a managed database.\n\n" +
 			"This is the moment traffic starts being turned away: from now on the " +
-			"application answers the networks in the profile and nobody else.\n\n" +
+			"application answers the networks in the profile and nobody else. A database " +
+			"accepts connections from those networks and from applications running on " +
+			"Out Plane, which can always connect.\n\n" +
 			"It applies immediately, without a deployment, which makes it the fastest way " +
 			"in this CLI to take a running application off the public internet, in both " +
 			"the intended and the unintended sense.",
@@ -484,31 +544,24 @@ func ipProfileAssign() Command {
 
 		APICalls: []string{
 			"GET /api/IPAccessProfile/GetById/{profileId}",
-			"GET /api/App/GetAppsByTeamId",
+			"GET /api/App/GetAppsByTeamId (without --db)",
 			"POST /api/IPAccessProfile/Assign",
+			"GET /api/DataStorage/GetAllDataSourcesByTeamId (with --db)",
 		},
 
 		Args:  []Arg{{Name: "profile", Short: "profile name or id", Required: true}},
-		Flags: []Flag{ipProfileAppFlag()},
+		Flags: []Flag{ipProfileAppFlag(), ipProfileDBFlag()},
 
-		OutputFields: []Field{
-			{Name: "action", Type: "string", Enum: []string{"assign", "unassign"}},
-			{Name: "profile", Type: "string"},
-			{Name: "profileId", Type: "string"},
-			{Name: "app", Type: "string"},
-			{Name: "appId", Type: "string"},
-			{Name: "rules", Type: "int", Description: "how many networks the application will answer"},
-			{
-				Name:        "changed",
-				Type:        "bool",
-				Description: "false for a dry run, and false when it was already attached",
-			},
-		},
+		OutputFields: ipAssignFields("false for a dry run, and false when it was already attached"),
 
 		ErrorCodes: []string{
 			"ipprofile.not_found",
 			"app.not_found",
 			"context.no_app",
+			"db.not_found",
+			"db.ambiguous",
+			"usage.conflicting_flags",
+			"usage.empty_argument",
 			"usage.missing_argument",
 		},
 		ExitCodes: []int{0, 2, 3, 5, 8},
@@ -540,6 +593,14 @@ func ipProfileAssign() Command {
 				Placeholders: map[string]string{"office": "<PROFILE_NAME>", "checkout": "<APP_NAME>"},
 				Risk:         RiskWrite,
 			},
+			{
+				Title:        "restrict who can connect to a managed database",
+				Command:      "outplane ip-profile assign office --db orders --json --fields db,rules,changed",
+				Argv:         []string{"outplane", "ip-profile", "assign", "office", "--db", "orders", "--json", "--fields", "db,rules,changed"},
+				Placeholders: map[string]string{"office": "<PROFILE_NAME>", "orders": "<DATABASE_NAME>"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{"db": "orders", "rules": 2, "changed": true},
+			},
 		},
 
 		AutomationNotes: []string{
@@ -553,9 +614,15 @@ func ipProfileAssign() Command {
 				"the result reports rules 0.",
 			"More than one profile can be attached to the same application. They add up: " +
 				"an address allowed by any attached profile gets through.",
+			ipDBTargetNote,
+			"With --db the database's allow list is changed before the request returns. " +
+				"Applications running on Out Plane can always connect and are not listed in " +
+				"any profile. When the change cannot be made, the command fails and nothing " +
+				"is assigned. Profiles add up on a database as they do on an application. " +
+				"A timeout can still finish on the server, and `db get` says whether it did.",
 		},
 
-		Related: []string{"ip-profile unassign", "ip-profile get", "ip-profile create", "app get"},
+		Related: []string{"ip-profile unassign", "ip-profile get", "ip-profile create", "app get", "db get"},
 		DocsURL: "https://docs.outplane.com/cli/ip-profile",
 	}
 }
@@ -563,10 +630,10 @@ func ipProfileAssign() Command {
 func ipProfileUnassign() Command {
 	return Command{
 		Path:  []string{"ip-profile", "unassign"},
-		Short: "stop an application using a profile",
-		Long: "Detaches a profile from an application.\n\n" +
-			"The application is reachable from anywhere again, unless another profile is " +
-			"still attached to it. This applies immediately, without a deployment.\n\n" +
+		Short: "stop an application or a database using a profile",
+		Long: "Detaches a profile from an application, or with --db from a managed database.\n\n" +
+			"The application or database is reachable from anywhere again, unless another " +
+			"profile is still attached to it. This applies immediately, without a deployment.\n\n" +
 			"The platform removes an attachment by the attachment's own id rather than by " +
 			"the pair, so the attachment is looked up first. That is one extra request and " +
 			"it is what turns a missing attachment into a sentence rather than a 404.",
@@ -580,31 +647,24 @@ func ipProfileUnassign() Command {
 
 		APICalls: []string{
 			"GET /api/IPAccessProfile/GetById/{profileId}",
-			"GET /api/App/GetAppsByTeamId",
+			"GET /api/App/GetAppsByTeamId (without --db)",
 			"DELETE /api/IPAccessProfile/Unassign/{assignmentId}",
+			"GET /api/DataStorage/GetAllDataSourcesByTeamId (with --db)",
 		},
 
 		Args:  []Arg{{Name: "profile", Short: "profile name or id", Required: true}},
-		Flags: []Flag{ipProfileAppFlag()},
+		Flags: []Flag{ipProfileAppFlag(), ipProfileDBFlag()},
 
-		OutputFields: []Field{
-			{Name: "action", Type: "string", Enum: []string{"assign", "unassign"}},
-			{Name: "profile", Type: "string"},
-			{Name: "profileId", Type: "string"},
-			{Name: "app", Type: "string"},
-			{Name: "appId", Type: "string"},
-			{Name: "rules", Type: "int"},
-			{
-				Name:        "changed",
-				Type:        "bool",
-				Description: "false for a dry run, and false when it was not attached",
-			},
-		},
+		OutputFields: ipAssignFields("false for a dry run, and false when it was not attached"),
 
 		ErrorCodes: []string{
 			"ipprofile.not_found",
 			"app.not_found",
 			"context.no_app",
+			"db.not_found",
+			"db.ambiguous",
+			"usage.conflicting_flags",
+			"usage.empty_argument",
 			"usage.missing_argument",
 		},
 		ExitCodes: []int{0, 2, 3, 5, 8},
@@ -632,6 +692,14 @@ func ipProfileUnassign() Command {
 				Placeholders: map[string]string{"office": "<PROFILE_NAME>", "checkout": "<APP_NAME>"},
 				Risk:         RiskWrite,
 			},
+			{
+				Title:        "stop restricting a managed database",
+				Command:      "outplane ip-profile unassign office --db orders --json --fields db,changed",
+				Argv:         []string{"outplane", "ip-profile", "unassign", "office", "--db", "orders", "--json", "--fields", "db,changed"},
+				Placeholders: map[string]string{"office": "<PROFILE_NAME>", "orders": "<DATABASE_NAME>"},
+				Risk:         RiskWrite,
+				OutputSample: map[string]any{"db": "orders", "changed": true},
+			},
 		},
 
 		AutomationNotes: []string{
@@ -642,9 +710,12 @@ func ipProfileUnassign() Command {
 				"and exits 0.",
 			"Deleting a profile is refused while anything still uses it, so this is the " +
 				"command that has to run first.",
+			ipDBTargetNote,
+			"With --db the database's allow list is changed before the request returns. When " +
+				"the change cannot be made, the command fails and the profile stays attached.",
 		},
 
-		Related: []string{"ip-profile assign", "ip-profile get", "ip-profile delete"},
+		Related: []string{"ip-profile assign", "ip-profile get", "ip-profile delete", "db get"},
 		DocsURL: "https://docs.outplane.com/cli/ip-profile",
 	}
 }
