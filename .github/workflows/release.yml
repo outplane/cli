@@ -1,9 +1,14 @@
 # Cutting a release.
 #
 # One tag produces everything: six binaries, their checksums, a GitHub release
-# carrying the install script, and seven npm packages. Nothing here is done by
-# hand afterwards, because a release assembled half by a workflow and half by a
-# person is a release that differs between one version and the next.
+# carrying the install script, and seven npm packages. Nothing here is
+# assembled by hand, because a release assembled half by a workflow and half
+# by a person is a release that differs between one version and the next.
+#
+# One thing is still done by a person, on purpose. The npm packages are staged,
+# not published: they wait on the registry until a maintainer approves each of
+# them with two-factor authentication. The token this workflow holds cannot
+# put a version in front of users on its own, so a leaked token cannot either.
 #
 # The tag is the version. v0.2.0 builds a CLI that reports 0.2.0, and there is
 # no second place to update.
@@ -36,6 +41,14 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      # Staging is newer than the npm this Node ships with. Checked here, so a
+      # runner without it stops before anything is built, not at the last step.
+      - name: Use an npm that can stage
+        run: |
+          set -eu
+          npm install -g npm@11.20.0
+          npm stage --help >/dev/null
 
       - name: Read the version from the tag
         id: version
@@ -172,42 +185,92 @@ jobs:
           }
           EOF
 
-      # A rehearsal first. A token that cannot publish, or a name that is not
-      # ours, fails here rather than after three packages are already public
-      # and the fourth is not.
-      - name: Check the packages would publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_ORG_SECRET }}
-        run: |
-          set -eu
-          for dir in npm-dist/cli-*; do
-            (cd "$dir" && npm publish --dry-run --access public)
-          done
-          (cd npm-dist/cli && npm publish --dry-run --access public)
-
       # The platform packages go first. The wrapper depends on them, and a
-      # wrapper published against versions that do not exist yet is an install
-      # that fails for whoever is quickest.
-      - name: Publish to npm
+      # wrapper that is live before the versions it points at is an install
+      # that fails for whoever is quickest. The same order holds for approval.
+      - name: Stage the packages on npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_ORG_SECRET }}
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           set -eu
 
-          # A version already on the registry is skipped rather than retried.
-          # npm refuses to republish one, and this workflow has to survive being
-          # run again after failing part way: that is what a re-run is for.
-          publish() {
+          # A version already on the registry, live or staged, is skipped
+          # rather than retried. npm refuses the same version twice, and this
+          # workflow has to survive being run again after failing part way:
+          # that is what a re-run is for. A listing that fails is not read as
+          # "not staged" in silence; staging again then fails on the conflict.
+          waiting() {
             name=$(node -p "require('./package.json').name")
             if npm view "${name}@${VERSION}" version >/dev/null 2>&1; then
               echo "${name}@${VERSION} is already published"
-              return
+              return 1
             fi
-            npm publish --access public
+            if ! staged=$(npm stage list "${name}" --json 2>/dev/null); then
+              echo "::warning::could not list the staged versions of ${name}"
+              return 0
+            fi
+            hit=$(printf '%s' "$staged" | NAME="$name" node -e '
+              let items = []
+              try { items = JSON.parse(require("fs").readFileSync(0, "utf8")) } catch {}
+              const list = Array.isArray(items) ? items : []
+              const found = list.some(i => i.packageName === process.env.NAME && i.version === process.env.VERSION)
+              console.log(found ? "yes" : "no")
+            ')
+            if [ "$hit" = yes ]; then
+              echo "${name}@${VERSION} is already staged"
+              return 1
+            fi
+            return 0
           }
 
-          for dir in npm-dist/cli-*; do
-            (cd "$dir" && publish)
+          # npm will not put a prerelease on latest by itself, and the tag a
+          # version is staged with cannot be changed afterwards. Only a
+          # prerelease gets one, so npm still refuses to move latest backwards.
+          tag=
+          case "$VERSION" in *-*) tag=next ;; esac
+          stage() { npm stage publish --access public ${tag:+--tag "$tag"} "$@"; }
+
+          # A rehearsal first. A package that does not pack, or a version npm
+          # would refuse, fails here rather than after three packages are
+          # already staged and the fourth is not. It proves nothing about the
+          # token: a dry run never asks the registry to write.
+          for dir in npm-dist/cli-* npm-dist/cli; do
+            (cd "$dir" && if waiting; then stage --dry-run; fi)
           done
-          (cd npm-dist/cli && publish)
+
+          for dir in npm-dist/cli-* npm-dist/cli; do
+            (cd "$dir" && if waiting; then stage; fi)
+          done
+
+      # The new version is not installable from npm until a maintainer approves
+      # it, so the run says so where it will be read. Only ids, names and
+      # versions are printed: the summary of a public repository is public. A
+      # listing that fails does not fail the release, the packages are staged.
+      - name: Say what waits for approval
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_ORG_SECRET }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          {
+            echo "## npm: ${VERSION} is staged, not published"
+            echo
+            echo "A maintainer approves each package with two-factor authentication,"
+            echo "in this order: the six platform packages first, \`outplane\` last."
+            echo "Until then npm installs stay on the previous version, so raise the"
+            echo "recommended version only after the last approval."
+            echo
+            echo '```'
+            for dir in npm-dist/cli-* npm-dist/cli; do
+              name=$(node -p "require('./${dir}/package.json').name")
+              npm stage list "${name}" --json 2>/dev/null | NAME="$name" node -e '
+                let items = []
+                try { items = JSON.parse(require("fs").readFileSync(0, "utf8")) } catch {}
+                const hit = Array.isArray(items) && items.find(i => i.packageName === process.env.NAME && i.version === process.env.VERSION)
+                console.log(hit
+                  ? "npm stage approve " + hit.id + "   # " + process.env.NAME
+                  : "# " + process.env.NAME + "@" + process.env.VERSION + ": not in the staged list")
+              ' || echo "# ${name}: could not list"
+            done
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
